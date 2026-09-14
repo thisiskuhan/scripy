@@ -65,6 +65,12 @@ async function launch(filePath) {
   await expect(page.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'true', {
     timeout: 20000,
   })
+  if (!filePath) {
+    const home = page.getByRole('main', { name: 'Scripy home', exact: true })
+    await expect(home).toBeVisible()
+    await home.locator('.home-recent-item[data-current="true"]').click()
+  }
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
   return page
 }
 
@@ -135,13 +141,13 @@ try {
   assert.equal((await fs.readdir(temporary)).includes('Recovered copy.SCRIPY.scripy'), false)
 
   await setOpenDestination(invalidPath)
-  await menu(page, 'Open file')
+  await menu(page, 'Import...')
   await expect(page.getByRole('alert')).toContainText('Invalid Scripy document')
   await expect(page.locator('.file-location')).toHaveText(copyPath)
   await expect(page.locator('.screenplay-editor')).toContainText('My recoverable local changes.')
   await page.getByRole('button', { name: 'Dismiss error', exact: true }).click()
   await setOpenDestination(secondPath)
-  await menu(page, 'Open file')
+  await menu(page, 'Import...')
   await expect(page.locator('.file-location')).toHaveText(secondPath)
   await expect(page.locator('.screenplay-editor')).toContainText('The second file.')
   await requestOpen(firstPath)
@@ -222,6 +228,7 @@ try {
   })
   await typeLine(page, ' Saved despite local storage failure.')
   await expect(page.locator('.status-error')).toBeVisible()
+  assert.match(await fs.readFile(recoveryPath, 'utf8'), /Saved despite local storage failure\./)
   await setSaveDestination(rescuePath)
   await menu(page, 'Save as...')
   await expect(page.locator('.file-location')).toHaveText(rescuePath)

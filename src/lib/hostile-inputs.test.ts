@@ -352,7 +352,7 @@ describe('artwork validation boundaries', () => {
     )
   })
 
-  it('rejects jpeg data urls, whitespace in base64, and payloads above 1.5 MB', () => {
+  it('rejects jpeg data urls, whitespace in base64, and payloads above 4.5 MB', () => {
     expect(() =>
       validateArtwork({ name: 'a.jpg', dataUrl: 'data:image/jpeg;base64,/9j/AAAA', width: 1, height: 1 }),
     ).toThrow('metadata')
@@ -360,7 +360,7 @@ describe('artwork validation boundaries', () => {
       'embedded PNG',
     )
     expect(() =>
-      validateArtwork({ name: 'a.png', dataUrl: png(1, 1, 1500001), width: 1, height: 1 }),
+      validateArtwork({ name: 'a.png', dataUrl: png(1, 1, 4500001), width: 1, height: 1 }),
     ).toThrow('embedded PNG')
   })
 

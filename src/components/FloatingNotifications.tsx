@@ -29,9 +29,29 @@ export function FloatingNotifications({ notices }: { notices: Notice[] }) {
   useLayoutEffect(() => {
     const element = container.current
     if (!element?.isConnected || !notices.length) return
+    const actions = target.matches('dialog[open]') ? target.querySelector('.dialog-actions') : null
+    const position = () => {
+      if (actions?.isConnected) {
+        const top = Math.max(24, actions.getBoundingClientRect().top - 12)
+        element.style.bottom = `${Math.max(46, window.innerHeight - top)}px`
+        element.style.maxHeight = `${Math.max(0, top - 24)}px`
+      } else {
+        element.style.removeProperty('bottom')
+        element.style.removeProperty('max-height')
+      }
+    }
+    position()
+    const observer = new ResizeObserver(position)
+    observer.observe(target)
+    if (actions) observer.observe(actions)
+    window.addEventListener('resize', position)
+    target.addEventListener('scroll', position, true)
     element.setAttribute('popover', 'manual')
     element.showPopover?.()
     return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', position)
+      target.removeEventListener('scroll', position, true)
       if (element.isConnected && element.matches(':popover-open')) element.hidePopover()
     }
   }, [target, notices.length])

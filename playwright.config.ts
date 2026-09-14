@@ -18,5 +18,6 @@ export default defineConfig({
     url: 'http://127.0.0.1:4187',
     reuseExistingServer: !process.env.CI,
     timeout: 30000,
+    env: { VITE_GOOGLE_CLIENT_ID: 'scripy-e2e.apps.googleusercontent.com' },
   },
 })

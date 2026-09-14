@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { Fountain } from 'fountain-js'
 
@@ -50,6 +50,32 @@ test('character completion works and closes when focus leaves the editor', async
   await expect(page.getByRole('listbox', { name: 'Character suggestions' })).toHaveCount(0)
 })
 
+test('dialogs trap keyboard focus and return it to their opener', async ({ page }) => {
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
+  const opener = page.getByRole('button', { name: 'Editor preferences', exact: true })
+  for (const dismissal of ['Escape', 'close button', 'backdrop']) {
+    await opener.focus()
+    await page.keyboard.press('Enter')
+    const dialog = page.getByRole('dialog', { name: 'Editor preferences', exact: true })
+    await expect(dialog).toBeVisible()
+    for (let step = 0; step < 12; step += 1) {
+      await page.keyboard.press('Tab')
+      const focus = await dialog.evaluate((element) => ({
+        insideDialog: element.contains(document.activeElement),
+        browserChrome: document.activeElement === document.body && !document.hasFocus(),
+      }))
+      expect(focus.insideDialog || focus.browserChrome, JSON.stringify(focus)).toBe(true)
+    }
+    await dialog.getByRole('button', { name: 'Close dialog', exact: true }).focus()
+    if (dismissal === 'Escape') await page.keyboard.press('Escape')
+    else if (dismissal === 'close button')
+      await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click()
+    else await page.mouse.click(8, 8)
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+  }
+})
+
 test('preferences and zoom are applied and survive reload', async ({ page }) => {
   await page.getByRole('button', { name: 'Editor preferences', exact: true }).click()
   await page.getByRole('checkbox', { name: 'Spellcheck', exact: true }).uncheck()
@@ -73,7 +99,11 @@ test('filters and navigates scenes and characters', async ({ page }) => {
   await page.getByRole('textbox', { name: 'Filter scenes', exact: true }).fill('station')
   await expect(page.locator('.scene-row')).toHaveCount(1)
   await page.locator('.scene-row').click()
-  await expect(page.locator('.inspector h3')).toHaveText('INT. CENTRAL STATION')
+  await expect(
+    page
+      .getByRole('complementary', { name: 'Scene notes', exact: true })
+      .getByRole('heading', { name: 'INT. CENTRAL STATION', exact: true }),
+  ).toBeVisible()
   await page.getByRole('textbox', { name: 'Filter scenes', exact: true }).fill('')
   await page.getByRole('tab', { name: 'Characters', exact: true }).click()
   await page.getByRole('textbox', { name: 'Filter characters', exact: true }).fill('samir')
@@ -176,7 +206,8 @@ test('document details persist across project creation and switching', async ({ 
   await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Next Project')
   await page.getByRole('button', { name: 'Create screenplay', exact: true }).click()
   await expect(page.locator('.screenplay-editor p')).toHaveCount(1)
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click()
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'My screenplays', exact: true }).click()
   await expect(page.locator('.project-list-item')).toHaveCount(2)
   await page.locator('.project-list-item').filter({ hasText: 'A Different Morning' }).click()
   await expect(page.locator('.screenplay-editor p')).toHaveCount(58)

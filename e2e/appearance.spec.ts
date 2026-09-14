@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import path from 'node:path'
 
@@ -175,7 +175,7 @@ test('dark surfaces and text have readable contrast across the workspace and dia
   }
   await page
     .getByLabel('Title-page image file', { exact: true })
-    .setInputFiles(path.resolve('public/icon.png'))
+    .setInputFiles(path.resolve('e2e/fixtures/title-1080p.png'))
   const image = page.getByRole('img', { name: 'Title-page artwork', exact: true })
   await expect(image).toBeVisible()
   await expect(image).toHaveCSS('filter', 'none')
@@ -266,7 +266,9 @@ test('dark appearance controls and mobile drawers fit narrow screens', async ({ 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
   const tabs = await page.locator('.view-tabs').boundingBox()
   const actions = await page.locator('.view-actions').boundingBox()
-  expect(tabs!.x + tabs!.width).toBeLessThanOrEqual(actions!.x)
+  expect(tabs!.x + tabs!.width <= actions!.x || tabs!.y + tabs!.height <= actions!.y).toBe(true)
+  const toolbar = await page.locator('.editor-toolbar').boundingBox()
+  expect(actions!.y + actions!.height).toBeLessThanOrEqual(toolbar!.y)
   await page.screenshot({ path: 'test-results/studio-dark-mobile-320.png' })
 })
 
@@ -287,4 +289,20 @@ test('unavailable preference storage does not block changing appearance or writi
   await page.keyboard.type(' Still writable.')
   await expect(page.locator('.screenplay-editor')).toContainText('Still writable.')
   await expect(page.locator('.status-saved')).toBeVisible()
+})
+
+test('Alt+T toggles between light and dark themes', async ({ page }) => {
+  await ready(page)
+  const themeButton = page.getByRole('button', { name: 'Switch to dark mode', exact: true })
+  await expect(themeButton).toHaveAttribute('title', 'Switch to dark mode (Alt+T)')
+  await expect(themeButton).toHaveAttribute('aria-keyshortcuts', 'Alt+T')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await page.keyboard.press('Alt+t')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.getByRole('button', { name: 'Switch to light mode', exact: true })).toHaveAttribute(
+    'title',
+    'Switch to light mode (Alt+T)',
+  )
+  await page.keyboard.press('Alt+t')
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
 })

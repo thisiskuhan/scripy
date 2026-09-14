@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { ImagePlus, LoaderCircle, Trash2 } from 'lucide-react'
-import { prepareTitleArtwork, type TitleArtwork } from '../lib/artwork'
+import { ARTWORK_UPLOAD_REQUIREMENTS, prepareTitleArtwork, type TitleArtwork } from '../lib/artwork'
 import { paperMetrics, type PaperSize } from '../lib/paper'
 import { FloatingNotifications } from './FloatingNotifications'
 
@@ -24,6 +24,7 @@ export function TitleArtworkEditor({
   onBusyChange,
 }: Props) {
   const input = useRef<HTMLInputElement>(null)
+  const requirementsId = useId()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const paper = paperMetrics(paperSize)
@@ -31,12 +32,13 @@ export function TitleArtworkEditor({
     <section className="title-artwork-section" aria-label="Title page">
       <div className="title-artwork-heading">
         <span className="field-heading">
-          TITLE-PAGE IMAGE <span className="optional-label">Optional</span>
+          Title page <span className="optional-label">Optional image</span>
         </span>
         <div className="artwork-actions">
           <button
             type="button"
             className="button small"
+            aria-describedby={requirementsId}
             disabled={disabled || loading}
             onClick={() => input.current?.click()}
           >
@@ -66,6 +68,7 @@ export function TitleArtworkEditor({
         type="file"
         accept="image/png,image/jpeg,.png,.jpg,.jpeg"
         aria-label="Title-page image file"
+        aria-describedby={requirementsId}
         onChange={async (event) => {
           const file = event.currentTarget.files?.[0]
           event.currentTarget.value = ''
@@ -83,6 +86,9 @@ export function TitleArtworkEditor({
           }
         }}
       />
+      <p className="artwork-requirements" id={requirementsId}>
+        {ARTWORK_UPLOAD_REQUIREMENTS}
+      </p>
       <div
         className="title-preview"
         data-paper-size={paperSize}

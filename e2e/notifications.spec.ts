@@ -1,10 +1,11 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 
 const errors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
   errors.set(page, [])
   page.on('pageerror', (error) => errors.get(page)!.push(error.message))
   await page.goto('/')
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
   await expect(page.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'true')
 })
 test.afterEach(async ({ page }) => {

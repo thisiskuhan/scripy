@@ -1,10 +1,11 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 
 const errors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
   errors.set(page, [])
   page.on('pageerror', (error) => errors.get(page)!.push(error.message))
   await page.goto('/')
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
   await expect(page.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'true')
 })
 test.afterEach(async ({ page }) => {
@@ -12,6 +13,9 @@ test.afterEach(async ({ page }) => {
 })
 
 test('fullscreen fills the browser display and preserves text and undo on exit', async ({ page }) => {
+  const enter = page.getByRole('button', { name: 'Enter fullscreen', exact: true })
+  await expect(enter).toHaveAttribute('title', 'Enter fullscreen (F11)')
+  await expect(enter).toHaveAttribute('aria-keyshortcuts', 'F11')
   await page.locator('.screenplay-editor p').nth(1).click()
   await page.keyboard.press('End')
   await page.keyboard.type(' Fullscreen keeps this edit.')
@@ -78,7 +82,24 @@ test('fullscreen and appearance buttons fit a narrow viewport', async ({ page })
   await page.setViewportSize({ width: 320, height: 740 })
   const tabs = await page.locator('.view-bar-left').boundingBox()
   const actions = await page.locator('.view-actions').boundingBox()
-  expect(tabs!.x + tabs!.width).toBeLessThanOrEqual(actions!.x)
+  expect(tabs!.x + tabs!.width <= actions!.x || tabs!.y + tabs!.height <= actions!.y).toBe(true)
+  const toolbar = await page.locator('.editor-toolbar').boundingBox()
+  expect(actions!.y + actions!.height).toBeLessThanOrEqual(toolbar!.y)
   await expect(page.getByRole('button', { name: 'Enter fullscreen', exact: true })).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+})
+
+test('Alt+F toggles focus mode and the button advertises the shortcut', async ({ page }) => {
+  const focusButton = page.getByRole('button', { name: 'Focus mode', exact: true })
+  await expect(focusButton).toHaveAttribute('title', 'Focus mode (Alt+F)')
+  await expect(focusButton).toHaveAttribute('aria-keyshortcuts', 'Alt+F')
+  await page.locator('.screenplay-editor p').nth(1).click()
+  const text = await page.locator('.screenplay-editor').innerText()
+  await page.keyboard.press('Alt+f')
+  await expect(page.locator('.app')).toHaveClass(/focus-mode/)
+  await expect(page.getByRole('button', { name: 'Exit focus', exact: true })).toBeVisible()
+  expect(await page.locator('.screenplay-editor').innerText()).toBe(text)
+  await page.keyboard.press('Alt+f')
+  await expect(page.locator('.app')).not.toHaveClass(/focus-mode/)
+  await expect(focusButton).toBeVisible()
 })

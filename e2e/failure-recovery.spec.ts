@@ -1,12 +1,14 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 
 const errors = new WeakMap<Page, string[]>()
 test.beforeEach(async ({ page }) => {
   errors.set(page, [])
   page.on('pageerror', (error) => errors.get(page)!.push(error.message))
   await page.goto('/')
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
   await expect(page.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'true')
   await page.evaluate(() => document.fonts.ready)
+  await expect(page.locator('.status-saved')).toBeVisible()
 })
 test.afterEach(async ({ page }) => {
   expect(errors.get(page)).toEqual([])
@@ -21,7 +23,7 @@ async function failLocalWrites(page: Page, emergency = false) {
     }
     if (blockEmergency)
       Storage.prototype.setItem = function (key, value) {
-        if (key === 'scripy.emergency.v1')
+        if (key.startsWith('scripy.emergency.v1'))
           throw new DOMException('Emergency storage full', 'QuotaExceededError')
         return set.call(this, key, value)
       }
@@ -42,6 +44,17 @@ async function typeMarker(page: Page, text: string) {
   await page.keyboard.type(text)
 }
 
+async function restoreAndRetry(page: Page) {
+  const retry = page.getByRole('button', { name: 'Retry save', exact: true })
+  await retry.evaluate((button) => {
+    button.addEventListener('click', () => window.dispatchEvent(new Event('restore-test-storage')), {
+      capture: true,
+      once: true,
+    })
+  })
+  await retry.click()
+}
+
 test('quota failure keeps the text editable and Retry save recovers it durably', async ({ page }) => {
   await failLocalWrites(page)
   await typeMarker(page, ' A recoverable edit.')
@@ -49,27 +62,26 @@ test('quota failure keeps the text editable and Retry save recovers it durably',
   await expect(page.getByRole('alert')).toContainText('Injected local quota exceeded')
   await expect(page.locator('.screenplay-editor')).toContainText('A recoverable edit.')
   await typeMarker(page, ' Still writing.')
-  await page.evaluate(() => window.dispatchEvent(new Event('restore-test-storage')))
-  await page.getByRole('button', { name: 'Retry save', exact: true }).click()
+  await restoreAndRetry(page)
   await expect(page.locator('.status-saved')).toBeVisible()
   await page.reload()
   await expect(page.locator('.screenplay-editor')).toContainText('A recoverable edit. Still writing.')
 })
 
-test('Save document still downloads a rescue copy when both recovery stores fail', async ({ page }) => {
+test('Download copy still rescues the draft when both recovery stores fail', async ({ page }) => {
   await failLocalWrites(page, true)
   await typeMarker(page, ' Rescue this text.')
   await expect(page.locator('.status-error')).toBeVisible()
   const pending = page.waitForEvent('download', { timeout: 5000 })
-  await page.getByRole('button', { name: 'Save document', exact: true }).click()
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Download copy', exact: true }).click()
   const download = await pending
   const stream = await download.createReadStream()
   const chunks: Buffer[] = []
   for await (const chunk of stream!) chunks.push(Buffer.from(chunk))
   expect(JSON.parse(Buffer.concat(chunks).toString('utf8')).blocks[1].text).toContain('Rescue this text.')
   await expect(page.locator('.status-error')).toBeVisible()
-  await page.evaluate(() => window.dispatchEvent(new Event('restore-test-storage')))
-  await page.getByRole('button', { name: 'Retry save', exact: true }).click()
+  await restoreAndRetry(page)
   await expect(page.locator('.status-saved')).toBeVisible()
 })
 
@@ -78,7 +90,7 @@ test('recovery history remains readable while writes are failing', async ({ page
   await typeMarker(page, ' Cannot save yet.')
   await expect(page.locator('.status-error')).toBeVisible()
   await page.getByRole('button', { name: 'Recovery history', exact: true }).click()
-  await expect(page.locator('.snapshot-row').filter({ hasText: 'Initial draft' })).toHaveCount(1)
+  await expect(page.locator('.snapshot-row').filter({ hasText: 'Imported document' })).toHaveCount(1)
   await page.evaluate(() => window.dispatchEvent(new Event('restore-test-storage')))
 })
 
@@ -87,7 +99,7 @@ test('a failed snapshot restore preserves the current draft and can be retried',
   await expect(page.locator('.status-saved')).toBeVisible()
   await failLocalWrites(page)
   await page.getByRole('button', { name: 'Recovery history', exact: true }).click()
-  const initial = page.locator('.snapshot-row').filter({ hasText: 'Initial draft' })
+  const initial = page.locator('.snapshot-row').filter({ hasText: 'Imported document' })
   await initial.getByRole('button', { name: 'Restore', exact: true }).click()
   await initial.getByRole('button', { name: 'Confirm restore', exact: true }).click()
   await expect(page.getByRole('alert')).toContainText('Injected local quota exceeded')
@@ -225,6 +237,7 @@ test('an oversized paste is rejected before entering an unsavable state', async 
 test('read-only tabs reject keyboard formatting and undo commands', async ({ context }) => {
   const other = await context.newPage()
   await other.goto('/')
+  await expect(other.locator('.screenplay-editor')).toBeVisible()
   await expect(other.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'false')
   const paragraph = other.locator('.screenplay-editor p').first()
   const original = await other.locator('.screenplay-editor').innerText()

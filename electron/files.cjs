@@ -2,6 +2,7 @@ const fs = require('node:fs/promises')
 const path = require('node:path')
 const crypto = require('node:crypto')
 const { constants } = require('node:fs')
+const lockfile = require('proper-lockfile')
 
 const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 
@@ -13,7 +14,7 @@ function documentId(content) {
     !value ||
     typeof value !== 'object' ||
     Array.isArray(value) ||
-    (value.version !== 1 && value.version !== 2) ||
+    ![1, 2, 3].includes(value.version) ||
     typeof value.id !== 'string' ||
     !/^[\w-]{1,100}$/.test(value.id) ||
     !Array.isArray(value.blocks) ||
@@ -237,39 +238,68 @@ class DocumentFiles {
             if (error.code !== 'ENOENT') throw error
           }
         }
-        const nextFingerprint = contentFingerprint(content)
-        const assertUnchanged = async () => {
-          let currentFingerprint
-          try {
-            currentFingerprint = await fingerprint(target)
-          } catch {
+        target = path.join(await fs.realpath(path.dirname(target)), path.basename(target))
+        let compromised
+        let release
+        try {
+          release = await lockfile.lock(target, {
+            realpath: false,
+            stale: 30000,
+            update: 5000,
+            retries: 0,
+            onCompromised: (error) => {
+              compromised = error
+            },
+          })
+        } catch (error) {
+          if (error.code === 'ELOCKED')
             throw new Error(
-              'The screenplay file was moved or deleted. Export a new Scripy copy before closing.',
+              'This screenplay is being saved by another instance. Your draft is safe in local recovery; retry saving shortly.',
             )
-          }
-          if (currentFingerprint !== record.fingerprint)
-            throw new Error(
-              'This screenplay changed on disk. Your draft is safe in local recovery; export a Scripy copy to avoid overwriting external changes.',
-            )
-          return currentFingerprint
+          throw error
         }
-        if (!selectedPath && record) {
-          const currentFingerprint = await assertUnchanged()
-          if (nextFingerprint === currentFingerprint) {
-            if (this.sessionDirty) await this.persistSession()
-            return target
+        try {
+          const nextFingerprint = contentFingerprint(content)
+          const assertUnchanged = async () => {
+            let currentFingerprint
+            try {
+              currentFingerprint = await fingerprint(target)
+            } catch {
+              throw new Error(
+                'The screenplay file was moved or deleted. Export a new Scripy copy before closing.',
+              )
+            }
+            if (currentFingerprint !== record.fingerprint)
+              throw new Error(
+                'This screenplay changed on disk. Your draft is safe in local recovery; export a Scripy copy to avoid overwriting external changes.',
+              )
+            return currentFingerprint
           }
+          const beforeReplace = async () => {
+            if (compromised)
+              throw new Error('Exclusive file access was lost. Keep a new Scripy copy before closing.')
+            if (!selectedPath && record) await assertUnchanged()
+          }
+          if (!selectedPath && record) {
+            const currentFingerprint = await assertUnchanged()
+            if (nextFingerprint === currentFingerprint) {
+              if (this.sessionDirty) await this.persistSession()
+              return target
+            }
+          }
+          await atomicWrite(target, content, true, beforeReplace)
+          this.records.set(id, {
+            id,
+            path: target,
+            fingerprint: nextFingerprint,
+          })
+          this.activeId = id
+          this.sessionDirty = true
+          await this.persistSession()
+          return target
+        } finally {
+          await release()
         }
-        await atomicWrite(target, content, true, !selectedPath && record ? assertUnchanged : undefined)
-        this.records.set(id, {
-          id,
-          path: target,
-          fingerprint: nextFingerprint,
-        })
-        this.activeId = id
-        this.sessionDirty = true
-        await this.persistSession()
-        return target
       })
     this.queue = operation
     return operation

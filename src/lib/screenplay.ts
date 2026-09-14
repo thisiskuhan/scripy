@@ -1,6 +1,7 @@
 import { Fountain } from 'fountain-js'
 import { PAPER_SIZES, type PaperSize } from './paper'
 import { validateArtwork, type TitleArtwork } from './artwork'
+import { validatePassageNotes, type PassageNote } from './annotations'
 
 export const ELEMENTS = [
   'scene',
@@ -30,7 +31,7 @@ export interface ScriptBlock {
 }
 
 export interface Screenplay {
-  version: 2
+  version: 3
   id: string
   title: string
   author: string
@@ -40,6 +41,7 @@ export interface Screenplay {
   updatedAt: string
   blocks: ScriptBlock[]
   notes: Record<string, string>
+  annotations: PassageNote[]
   paperSize: PaperSize
   titleArtwork: TitleArtwork | null
 }
@@ -69,7 +71,7 @@ export function normalizeText(kind: ElementKind, text: string): string {
 export function createScreenplay(title = 'Untitled screenplay'): Screenplay {
   const now = new Date().toISOString()
   return {
-    version: 2,
+    version: 3,
     id: crypto.randomUUID(),
     title,
     author: '',
@@ -79,6 +81,7 @@ export function createScreenplay(title = 'Untitled screenplay'): Screenplay {
     updatedAt: now,
     blocks: [makeBlock('scene')],
     notes: {},
+    annotations: [],
     paperSize: 'letter',
     titleArtwork: null,
   }
@@ -161,8 +164,8 @@ function validString(value: unknown, max: number): value is string {
 }
 
 export function validateScreenplay(value: unknown): Screenplay {
-  if (!record(value) || (value.version !== 1 && value.version !== 2))
-    throw new Error('This is not a supported Scripy document (versions 1 and 2).')
+  if (!record(value) || ![1, 2, 3].includes(value.version as number))
+    throw new Error('This is not a supported Scripy document (versions 1, 2, and 3).')
   if (
     !validString(value.id, 100) ||
     !/^[\w-]+$/.test(value.id) ||
@@ -210,7 +213,7 @@ export function validateScreenplay(value: unknown): Screenplay {
     throw new Error('Choose a supported paper size: US Letter or A4.')
   const titleArtwork = value.version === 1 ? null : validateArtwork(value.titleArtwork)
   return {
-    version: 2,
+    version: 3,
     id: value.id,
     title: value.title.trim(),
     author: value.author,
@@ -220,6 +223,7 @@ export function validateScreenplay(value: unknown): Screenplay {
     updatedAt: value.updatedAt,
     blocks,
     notes,
+    annotations: validatePassageNotes(value.version === 3 ? value.annotations : [], blocks),
     paperSize: paperSize as PaperSize,
     titleArtwork,
   }

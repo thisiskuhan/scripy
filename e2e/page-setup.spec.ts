@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from './fixtures'
 import { getDocument, OPS, Util, type PDFPageProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
 import path from 'node:path'
 
@@ -140,7 +140,7 @@ test('title artwork is embedded above the title and never appears on screenplay 
   await page.getByRole('combobox', { name: 'Paper size', exact: true }).selectOption('a4')
   await page
     .getByLabel('Title-page image file', { exact: true })
-    .setInputFiles(path.resolve('public/icon.png'))
+    .setInputFiles(path.resolve('e2e/fixtures/title-1080p.png'))
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
   const image = await page.getByRole('img', { name: 'Title-page artwork', exact: true }).boundingBox()
   const title = await page.locator('.title-preview-copy strong').boundingBox()
@@ -167,23 +167,26 @@ test('title artwork is embedded above the title and never appears on screenplay 
   await withoutTitle.loading.destroy()
 
   const pending = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Save document', exact: true }).click()
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Download copy', exact: true }).click()
   const download = await pending
   const stream = await download.createReadStream()
   const chunks: Buffer[] = []
   for await (const chunk of stream!) chunks.push(Buffer.from(chunk))
   const buffer = Buffer.concat(chunks)
   const saved = JSON.parse(buffer.toString('utf8'))
-  expect(saved.version).toBe(2)
+  expect(saved.version).toBe(3)
   expect(saved.paperSize).toBe('a4')
   expect(saved.titleArtwork.dataUrl).toMatch(/^data:image\/png;base64,/)
+  expect(saved.titleArtwork.width / saved.titleArtwork.height).toBe(16 / 9)
+  expect(Buffer.from(saved.titleArtwork.dataUrl.split(',')[1], 'base64').length).toBeLessThan(3000000)
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
   await page.getByRole('button', { name: 'Remove title image', exact: true }).click()
   await page.getByRole('button', { name: 'Save details', exact: true }).click()
   await page
     .getByLabel('Open screenplay file', { exact: true })
     .setInputFiles({ name: 'with-artwork.scripy', mimeType: 'application/json', buffer })
-  await expect(page.getByRole('status')).toContainText('Opened with-artwork.scripy')
+  await expect(page.getByRole('status')).toContainText('Imported with-artwork.scripy')
   await page.reload()
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
@@ -196,7 +199,7 @@ test('image replacement and removal are optional and cancel does not change the 
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
   await page
     .getByLabel('Title-page image file', { exact: true })
-    .setInputFiles(path.resolve('public/images/quiet-city.jpg'))
+    .setInputFiles(path.resolve('e2e/fixtures/title-4k.jpg'))
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Save details', exact: true }).click()
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
@@ -207,8 +210,8 @@ test('image replacement and removal are optional and cancel does not change the 
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
   await page
     .getByLabel('Title-page image file', { exact: true })
-    .setInputFiles(path.resolve('public/icon.png'))
-  await expect(page.locator('.artwork-filename')).toHaveText('icon.png')
+    .setInputFiles(path.resolve('e2e/fixtures/title-1080p.png'))
+  await expect(page.locator('.artwork-filename')).toHaveText('title-1080p.png')
   await page.getByRole('button', { name: 'Save details', exact: true }).click()
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
   await page.getByRole('button', { name: 'Remove title image', exact: true }).click()
@@ -221,17 +224,24 @@ test('image replacement and removal are optional and cancel does not change the 
 test('rejects unsupported and oversized artwork without replacing the existing image', async ({ page }) => {
   await page.getByRole('button', { name: 'Edit document details', exact: true }).click()
   const input = page.getByLabel('Title-page image file', { exact: true })
-  await input.setInputFiles(path.resolve('public/icon.png'))
+  await expect(page.locator('.artwork-requirements')).toContainText('1920 x 1080 or 3840 x 2160, under 3 MB')
+  await input.setInputFiles(path.resolve('e2e/fixtures/title-1080p.png'))
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
   const original = await page
     .getByRole('img', { name: 'Title-page artwork', exact: true })
     .getAttribute('src')
+  await input.setInputFiles(path.resolve('public/icon.png'))
+  await expect(page.getByRole('alert')).toContainText('Choose a 16:9 image')
+  await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toHaveAttribute(
+    'src',
+    original!,
+  )
   await input.setInputFiles({
     name: 'not-an-image.png',
     mimeType: 'image/png',
     buffer: Buffer.from('<svg onload="alert(1)"></svg>'),
   })
-  await expect(page.getByRole('alert')).toContainText('Only PNG and JPEG')
+  await expect(page.getByRole('alert')).toContainText('Only PNG, JPG, and JPEG')
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toHaveAttribute(
     'src',
     original!,
@@ -239,9 +249,9 @@ test('rejects unsupported and oversized artwork without replacing the existing i
   await input.setInputFiles({
     name: 'too-large.png',
     mimeType: 'image/png',
-    buffer: Buffer.alloc(8 * 1024 * 1024 + 1),
+    buffer: Buffer.alloc(3000000),
   })
-  await expect(page.getByRole('alert')).toContainText('smaller than 8 MB')
+  await expect(page.getByRole('alert')).toContainText('smaller than 3 MB')
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toHaveAttribute(
     'src',
     original!,
@@ -254,7 +264,7 @@ test('title-page controls and preview fit a mobile dialog', async ({ page }) => 
   await page.getByRole('menuitem', { name: 'Document details', exact: true }).click()
   await page
     .getByLabel('Title-page image file', { exact: true })
-    .setInputFiles(path.resolve('public/icon.png'))
+    .setInputFiles(path.resolve('e2e/fixtures/title-1080p.png'))
   await expect(page.getByRole('img', { name: 'Title-page artwork', exact: true })).toBeVisible()
   expect(
     await page.getByRole('dialog').evaluate((element) => element.scrollWidth <= element.clientWidth),

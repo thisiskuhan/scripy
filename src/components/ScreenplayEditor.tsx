@@ -11,7 +11,7 @@ import { EditorState, TextSelection } from 'prosemirror-state'
 import { EditorView } from 'prosemirror-view'
 import { Fragment, Slice } from 'prosemirror-model'
 import { baseKeymap } from 'prosemirror-commands'
-import { history, redo, redoDepth, undo, undoDepth } from 'prosemirror-history'
+import { closeHistory, history, redo, redoDepth, undo, undoDepth } from 'prosemirror-history'
 import { keymap } from 'prosemirror-keymap'
 import { inputRules } from 'prosemirror-inputrules'
 import {
@@ -33,10 +33,18 @@ import {
   screenplayTab,
   setElement,
   stableIds,
-  toEditorDoc,
 } from '../editor/model'
 import { paginationKey, paginationPlugin } from '../editor/pagination'
 import { findMatches, searchKey, searchPlugin } from '../editor/search'
+import {
+  documentWithNotes,
+  markNote as markPassageNote,
+  noteDecorations,
+  notePosition,
+  readNoteRanges,
+  selectedPassage,
+} from '../editor/annotations'
+import type { NoteRange, PassageNote, PassageSelection } from '../lib/annotations'
 
 export interface EditorInfo {
   blockId: string
@@ -45,6 +53,7 @@ export interface EditorInfo {
   pages: number
   canUndo: boolean
   canRedo: boolean
+  passage: PassageSelection | null
 }
 export interface EditorHandle {
   getBlocks(): ScriptBlock[]
@@ -58,19 +67,25 @@ export interface EditorHandle {
   search(query: string, direction?: -1 | 1): number
   countMatches(query: string): number
   replace(query: string, replacement: string, all: boolean): number
+  markNote(note: PassageNote): void
+  removeNote(id: string): void
+  selectNote(note: PassageNote): void
 }
 interface Props {
   initialBlocks: ScriptBlock[]
+  annotations: PassageNote[]
   documentKey: string
   paperSize: PaperSize
   zoom: number
   sceneNumbers: boolean
   spellcheck: boolean
   readOnly: boolean
-  onChange(blocks: ScriptBlock[]): boolean
+  onChange(blocks: ScriptBlock[], ranges: Map<string, NoteRange[]>): boolean
   onSelection(info: EditorInfo): void
   onLayout(layout: ScriptLayout): void
   onFind(): void
+  onAddNote?(): void
+  onNoteClick?(id: string): void
 }
 
 export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function ScreenplayEditor(props, ref) {
@@ -102,7 +117,7 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
       ELEMENTS.map((kind, index) => [`Alt-${index + 1}`, setElement(kind)]),
     )
     const state = EditorState.create({
-      doc: toEditorDoc(latest.current.initialBlocks),
+      doc: documentWithNotes(latest.current.initialBlocks, latest.current.annotations),
       plugins: [
         stableIds,
         history({ depth: 200 }),
@@ -124,6 +139,17 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
             latest.current.onFind()
             return true
           },
+          'Mod-Alt-m': () => {
+            const current = view.current
+            if (
+              !current ||
+              latest.current.readOnly ||
+              !selectedPassage(current.state.doc, current.state.selection.from, current.state.selection.to)
+            )
+              return false
+            latest.current.onAddNote?.()
+            return true
+          },
         }),
         keymap(baseKeymap),
       ],
@@ -131,6 +157,14 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
     const editor = new EditorView(mount.current, {
       state,
       editable: () => !latest.current.readOnly,
+      decorations: (current) => noteDecorations(current.doc, latest.current.annotations),
+      handleClick: (_editor, _position, event) => {
+        const target = event.target instanceof Element ? event.target.closest('[data-note-id]') : null
+        const id = target?.getAttribute('data-note-id')
+        if (id && editor.state.selection.empty && latest.current.annotations.some((note) => note.id === id))
+          latest.current.onNoteClick?.(id)
+        return false
+      },
       attributes: {
         class: 'screenplay-editor',
         role: 'textbox',
@@ -178,7 +212,7 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
         const result = editor.state.applyTransaction(transaction)
         if (
           result.transactions.some((item) => item.docChanged) &&
-          !latest.current.onChange(fromEditorDoc(result.state.doc))
+          !latest.current.onChange(fromEditorDoc(result.state.doc), readNoteRanges(result.state.doc))
         )
           return
         editor.updateState(result.state)
@@ -205,6 +239,7 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
         pages: layout.pageCount,
         canUndo: undoDepth(current) > 0,
         canRedo: redoDepth(current) > 0,
+        passage: selectedPassage(current.doc, current.selection.from, current.selection.to),
       }
       const encoded = JSON.stringify(info)
       if (encoded !== priorInfo.current) {
@@ -250,6 +285,11 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
       )
     }
   }, [props.paperSize])
+
+  useEffect(() => {
+    const current = view.current
+    if (current) current.updateState(current.state)
+  }, [props.annotations])
 
   useImperativeHandle(
     ref,
@@ -310,8 +350,45 @@ export const ScreenplayEditor = forwardRef<EditorHandle, Props>(function Screenp
         const current = view.current
         if (!current || latest.current.readOnly) return
         current.dispatch(
-          current.state.tr.replaceWith(0, current.state.doc.content.size, toEditorDoc(blocks).content),
+          closeHistory(current.state.tr).replaceWith(
+            0,
+            current.state.doc.content.size,
+            documentWithNotes(blocks, latest.current.annotations).content,
+          ),
         )
+      },
+      markNote(note) {
+        const current = view.current
+        if (!current || latest.current.readOnly) return
+        const transaction = current.state.tr.removeMark(
+          0,
+          current.state.doc.content.size,
+          screenplaySchema.marks.passageNote.create({ id: note.id }),
+        )
+        markPassageNote(transaction, note.id, note.ranges)
+        current.dispatch(transaction.setMeta('addToHistory', false))
+      },
+      removeNote(id) {
+        const current = view.current
+        if (!current || latest.current.readOnly) return
+        current.dispatch(
+          current.state.tr
+            .removeMark(0, current.state.doc.content.size, screenplaySchema.marks.passageNote.create({ id }))
+            .setMeta('addToHistory', false),
+        )
+      },
+      selectNote(note) {
+        const current = view.current
+        if (!current || !note.ranges.length) return
+        const first = notePosition(current.state.doc, note.ranges[0])
+        const last = notePosition(current.state.doc, note.ranges[note.ranges.length - 1])
+        if (!first || !last) return
+        current.dispatch(
+          current.state.tr
+            .setSelection(TextSelection.create(current.state.doc, first.from, last.to))
+            .scrollIntoView(),
+        )
+        current.focus()
       },
       search(query, direction = 1) {
         const current = view.current

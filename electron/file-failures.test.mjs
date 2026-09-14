@@ -140,6 +140,43 @@ describe('native filesystem failure recovery', () => {
     expect((await fs.readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([])
   })
 
+  it('rejects a second independent writer during the final file replacement', async () => {
+    const destination = path.join(directory, 'competing.scripy')
+    const first = new files.DocumentFiles()
+    const second = new files.DocumentFiles()
+    await first.save(content(), destination)
+    const opened = await second.open(destination)
+    await second.bind(opened.token, 'fault-test-document')
+    const entered = gate()
+    const resume = gate()
+    let held = false
+    const rename = fs.rename
+    vi.spyOn(fs, 'rename').mockImplementation(async (source, target) => {
+      if (target === destination && !held) {
+        held = true
+        entered.resolve()
+        await resume.promise
+      }
+      return rename(source, target)
+    })
+    const firstSave = first.save(content('First protected save'))
+    await entered.promise
+    let secondError
+    try {
+      await second.save(content('Competing save'))
+    } catch (error) {
+      secondError = error
+    } finally {
+      resume.resolve()
+    }
+    await firstSave
+    expect(secondError?.message).toMatch(/another instance|changed on disk/)
+    expect(await fs.readFile(destination, 'utf8')).toBe(content('First protected save'))
+    expect(await fs.readFile(`${destination}.bak`, 'utf8')).toBe(content())
+    await expect(second.save(content('Stale retry'))).rejects.toThrow('changed on disk')
+    expect((await fs.readdir(directory)).filter((name) => /\.(tmp|lock)$/.test(name))).toEqual([])
+  })
+
   it('rejects corrupt UTF-8 rather than replacing damaged bytes in a screenplay', async () => {
     const destination = path.join(directory, 'bad-encoding.scripy')
     const original = Buffer.from(content())
@@ -148,6 +185,23 @@ describe('native filesystem failure recovery', () => {
     await fs.writeFile(destination, original)
     await expect(files.readDocument(destination)).rejects.toThrow('UTF-8')
     expect(await fs.readFile(destination)).toEqual(original)
+  })
+
+  it('rejects a fresh foreign lock and recovers a stale crash lock', async () => {
+    const destination = path.join(directory, 'crash-recovery.scripy')
+    const store = new files.DocumentFiles()
+    await store.save(content(), destination)
+    const lockPath = `${destination}.lock`
+    await fs.mkdir(lockPath)
+    await expect(store.save(content('Must wait'))).rejects.toThrow('another instance')
+    await expect(store.save(content('Must also wait'), destination)).rejects.toThrow('another instance')
+    expect(await fs.readFile(destination, 'utf8')).toBe(content())
+    const stale = new Date(Date.now() - 60000)
+    await fs.utimes(lockPath, stale, stale)
+    await store.save(content('Recovered after crash'))
+    expect(await fs.readFile(destination, 'utf8')).toBe(content('Recovered after crash'))
+    expect(await fs.readFile(`${destination}.bak`, 'utf8')).toBe(content())
+    expect((await fs.readdir(directory)).filter((name) => name.endsWith('.lock'))).toEqual([])
   })
 
   it('rejects malformed JSON roots with a document error, not a raw TypeError', () => {

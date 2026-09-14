@@ -1,11 +1,30 @@
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it } from 'vitest'
+import { openDB } from 'idb'
 import { createScreenplay } from './screenplay'
 import { closeStorage, listProjects, listSnapshots, loadActiveProject, saveProject } from './storage'
 
 afterEach(closeStorage)
 
 describe('durable local storage', () => {
+  it('migrates older recovery snapshots before they can replace the current screenplay', async () => {
+    const project = createScreenplay('Legacy recovery')
+    project.paperSize = 'a4'
+    project.notes[project.blocks[0].id] = 'Preserve this old scene note.'
+    await saveProject(project, true, 'Version 2 snapshot')
+    const store = await openDB('scripy-studio')
+    try {
+      const snapshots = await store.getAllFromIndex('snapshots', 'by-project', project.id)
+      await store.put('snapshots', {
+        ...snapshots[0],
+        project: { ...project, version: 2, annotations: undefined },
+      })
+    } finally {
+      store.close()
+    }
+    expect((await listSnapshots(project.id))[0].project).toEqual(project)
+  })
+
   it('saves and restores the active project including scene notes', async () => {
     const project = createScreenplay('A durable draft')
     project.notes[project.blocks[0].id] = 'A note that survives a restart.'

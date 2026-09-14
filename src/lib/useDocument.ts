@@ -1,22 +1,35 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
 import { serializeProject, type Screenplay, type ScriptBlock } from './screenplay'
-import { loadActiveProject, saveProject, writeEmergency } from './storage'
+import { localDocumentStorage, type DocumentStorage } from './storage'
+import type { NoteRange } from './annotations'
 
 export type SaveStatus = 'saved' | 'saving' | 'unsaved' | 'error'
 
-export function useDocument(initial: Screenplay, recovered = false) {
+export function useDocument(
+  initial: Screenplay,
+  recovered = false,
+  storage: DocumentStorage = localDocumentStorage,
+  hasInitialDocument = true,
+) {
+  const { loadActiveProject, saveProject, writeEmergency } = storage
   const [project, setProject] = useState(initial)
   const [status, setStatus] = useState<SaveStatus>(recovered ? 'unsaved' : 'saved')
   const [error, setError] = useState('')
   const [editError, setEditError] = useState('')
   const [writable, setWritable] = useState(false)
+  const [waitingForWriter, setWaitingForWriter] = useState(false)
   const [generation, setGeneration] = useState(0)
+  const [pendingWrites, setPendingWrites] = useState(0)
   const current = useRef(initial)
+  const hasDocument = useRef(hasInitialDocument)
   const removedNotes = useRef(new Map<string, string>())
   const statusRef = useRef<SaveStatus>(recovered ? 'unsaved' : 'saved')
   const switching = useRef<Promise<void> | null>(null)
   const queue = useRef(Promise.resolve())
   const lastSnapshot = useRef(Date.now())
+  const dirtySince = useRef<number | null>(recovered ? Date.now() : null)
+  const saveFailures = useRef(0)
+  const retryAt = useRef(0)
   const writableRef = useRef(false)
   const localStorageAvailable = useRef(true)
   const alive = useRef(true)
@@ -26,51 +39,82 @@ export function useDocument(initial: Screenplay, recovered = false) {
     let cancelled = false
     let release: (() => void) | undefined
     const controller = new AbortController()
-    if (navigator.locks) {
-      void navigator.locks
-        .request('scripy-workspace-writer', { signal: controller.signal }, async (lock) => {
-          if (cancelled) return
-          const fresh = await loadActiveProject()
-          if (cancelled) return
-          if (fresh && (fresh.id !== current.current.id || fresh.updatedAt !== current.current.updatedAt)) {
-            removedNotes.current.clear()
-            current.current = fresh
-            setProject(fresh)
-            setGeneration((value) => value + 1)
-          }
-          writableRef.current = Boolean(lock)
-          setWritable(Boolean(lock))
-          if (lock)
-            await new Promise<void>((resolve) => {
-              release = resolve
-            })
-        })
-        .catch((reason: unknown) => {
-          if (!cancelled)
-            setError(reason instanceof Error ? reason.message : 'Editing ownership could not be acquired.')
-        })
-    } else {
+    const locks = navigator.locks
+    setWritable(false)
+    setWaitingForWriter(false)
+    const takeOwnership = async (lock: Lock | null) => {
+      if (cancelled || !lock) return
+      setWaitingForWriter(false)
+      const fresh = await loadActiveProject()
+      if (cancelled) return
+      if (fresh) hasDocument.current = true
+      if (fresh && (fresh.id !== current.current.id || fresh.updatedAt !== current.current.updatedAt)) {
+        removedNotes.current.clear()
+        current.current = fresh
+        setProject(fresh)
+        setGeneration((value) => value + 1)
+      }
       writableRef.current = true
       setWritable(true)
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+    }
+    if (locks) {
+      void Promise.resolve()
+        .then(() => {
+          if (cancelled) return
+          return locks.request(storage.lockName, { ifAvailable: true }, (lock) => {
+            if (cancelled) return
+            if (lock) return takeOwnership(lock)
+            setWaitingForWriter(true)
+            return locks.request(storage.lockName, { signal: controller.signal }, takeOwnership)
+          })
+        })
+        .catch((reason: unknown) => {
+          if (!cancelled) {
+            setWaitingForWriter(false)
+            setError(reason instanceof Error ? reason.message : 'Editing ownership could not be acquired.')
+          }
+        })
+    } else {
+      setError(
+        'This browser cannot guarantee exclusive editing. Use a current browser over HTTPS or the desktop app.',
+      )
     }
     return () => {
+      if (writableRef.current && statusRef.current !== 'saved') {
+        try {
+          writeEmergency(current.current)
+        } catch {
+          localStorageAvailable.current = false
+        }
+        void persistRef.current(false, 'Session recovery', false).catch(() => undefined)
+      }
       cancelled = true
       alive.current = false
       writableRef.current = false
       controller.abort()
       release?.()
     }
-  }, [])
+  }, [storage, loadActiveProject, writeEmergency])
 
   function changeStatus(next: SaveStatus) {
+    if (next === 'unsaved') dirtySince.current ??= Date.now()
+    if (next === 'saved') {
+      dirtySince.current = null
+      saveFailures.current = 0
+      retryAt.current = 0
+    }
     statusRef.current = next
     if (alive.current) setStatus(next)
   }
 
   async function persist(checkpoint = false, label = 'Autosave', writeToDisk = true): Promise<void> {
     if (switching.current) await switching.current
-    if (!writableRef.current) return
+    if (!writableRef.current || !hasDocument.current) return
     const snapshot = current.current
+    if (alive.current) setPendingWrites((count) => count + 1)
     if (writeToDisk) changeStatus('saving')
     const shouldCheckpoint = checkpoint || Date.now() - lastSnapshot.current >= 60000
     const operation = queue.current
@@ -83,17 +127,33 @@ export function useDocument(initial: Screenplay, recovered = false) {
             localStorageAvailable.current = false
           }
         }
-        await saveProject(snapshot, shouldCheckpoint, label)
+        let recoveryFailed = false
+        let recoveryError: unknown
+        try {
+          await saveProject(snapshot, shouldCheckpoint, label)
+          if (shouldCheckpoint) lastSnapshot.current = Date.now()
+        } catch (reason) {
+          recoveryFailed = true
+          recoveryError = reason
+        }
         if (writeToDisk && window.scripyDesktop)
           await window.scripyDesktop.autosave(serializeProject(snapshot))
-        if (shouldCheckpoint) lastSnapshot.current = Date.now()
-        if (alive.current && current.current === snapshot && (writeToDisk || !window.scripyDesktop)) {
-          changeStatus('saved')
+        if (recoveryFailed) throw recoveryError
+        if (alive.current && (writeToDisk || !window.scripyDesktop)) {
+          saveFailures.current = 0
+          retryAt.current = 0
+          if (current.current === snapshot) changeStatus('saved')
+          else {
+            dirtySince.current = Date.now()
+            changeStatus('unsaved')
+          }
           setError('')
         }
       })
       .catch((reason: unknown) => {
         if (alive.current) {
+          saveFailures.current += 1
+          retryAt.current = Date.now() + Math.min(1000 * 2 ** Math.min(saveFailures.current - 1, 2), 4000)
           changeStatus('error')
           setError(
             reason instanceof Error
@@ -102,6 +162,9 @@ export function useDocument(initial: Screenplay, recovered = false) {
           )
         }
         throw reason
+      })
+      .finally(() => {
+        if (alive.current) setPendingWrites((count) => count - 1)
       })
     queue.current = operation
     return operation
@@ -124,16 +187,22 @@ export function useDocument(initial: Screenplay, recovered = false) {
   )
 
   useEffect(() => {
-    if (!writable || statusRef.current === 'saved') return
+    if (!writable || !hasDocument.current || pendingWrites > 0 || status === 'saved' || status === 'saving')
+      return
+    if (saveFailures.current > 3) return
+    const delay =
+      saveFailures.current > 0
+        ? Math.max(0, retryAt.current - Date.now())
+        : Math.min(450, Math.max(0, 5000 - (Date.now() - (dirtySince.current ?? Date.now()))))
     const timer = window.setTimeout(() => {
       void persistRef.current().catch(() => undefined)
-    }, 450)
+    }, delay)
     return () => window.clearTimeout(timer)
-  }, [project, writable])
+  }, [project, writable, status, pendingWrites])
 
   useEffect(() => {
     const emergency = () => {
-      if (!writableRef.current) return
+      if (!writableRef.current || !hasDocument.current) return
       try {
         writeEmergency(current.current)
       } catch {
@@ -162,10 +231,10 @@ export function useDocument(initial: Screenplay, recovered = false) {
       window.removeEventListener('beforeunload', beforeUnload)
       document.removeEventListener('visibilitychange', hidden)
     }
-  }, [])
+  }, [writeEmergency])
 
-  function update(change: (previous: Screenplay) => Screenplay) {
-    if (!writableRef.current || switching.current) return false
+  function update(change: (previous: Screenplay) => Screenplay, options: { immediate?: boolean } = {}) {
+    if (!writableRef.current || switching.current || !hasDocument.current) return false
     const next = {
       ...change(current.current),
       updatedAt: new Date(Math.max(Date.now(), Date.parse(current.current.updatedAt) + 1)).toISOString(),
@@ -179,13 +248,19 @@ export function useDocument(initial: Screenplay, recovered = false) {
       return false
     }
     current.current = next
+    if (saveFailures.current > 3) {
+      saveFailures.current = 0
+      retryAt.current = 0
+      dirtySince.current = Date.now()
+    }
     setEditError('')
-    startTransition(() => setProject(next))
+    if (options.immediate) setProject(next)
+    else startTransition(() => setProject(next))
     changeStatus('unsaved')
     return true
   }
 
-  function updateBlocks(blocks: ScriptBlock[]) {
+  function updateBlocks(blocks: ScriptBlock[], ranges?: Map<string, NoteRange[]>) {
     return update((previous) => {
       const ids = new Set(blocks.map((block) => block.id))
       const notes: Record<string, string> = {}
@@ -197,7 +272,11 @@ export function useDocument(initial: Screenplay, recovered = false) {
         if (!Object.prototype.hasOwnProperty.call(notes, id) && removedNotes.current.has(id))
           notes[id] = removedNotes.current.get(id)!
       }
-      return { ...previous, blocks, notes }
+      const annotations = previous.annotations.map((note) => ({
+        ...note,
+        ranges: ranges ? (ranges.get(note.id) ?? []) : note.ranges.filter((range) => ids.has(range.blockId)),
+      }))
+      return { ...previous, blocks, notes, annotations }
     })
   }
 
@@ -205,17 +284,18 @@ export function useDocument(initial: Screenplay, recovered = false) {
     next: Screenplay,
     label = 'Opened document',
     acceptFile?: () => Promise<void>,
+    writePreviousToDisk = !acceptFile,
   ) {
     if (!writableRef.current) throw new Error('This workspace is being edited in another tab.')
     if (switching.current) throw new Error('Another document is still opening.')
     const previous = current.current
     const operation = (async () => {
-      await persist(true, 'Before switching documents', !acceptFile)
+      await persist(true, 'Before switching documents', writePreviousToDisk)
       await saveProject(next, true, label)
       try {
         await acceptFile?.()
       } catch (reason) {
-        await saveProject(previous)
+        if (hasDocument.current) await saveProject(previous)
         throw reason
       }
       try {
@@ -224,6 +304,10 @@ export function useDocument(initial: Screenplay, recovered = false) {
         localStorageAvailable.current = false
       }
       removedNotes.current.clear()
+      hasDocument.current = true
+      saveFailures.current = 0
+      retryAt.current = 0
+      dirtySince.current = null
       current.current = next
       setProject(next)
       changeStatus(acceptFile ? 'saved' : 'unsaved')
@@ -247,10 +331,12 @@ export function useDocument(initial: Screenplay, recovered = false) {
 
   return {
     project,
+    hasDocument: hasDocument.current,
     current,
     status,
     error: error || editError,
     writable,
+    waitingForWriter,
     generation,
     update,
     updateBlocks,

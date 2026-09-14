@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 
 export function Dialog({
@@ -6,15 +6,17 @@ export function Dialog({
   children,
   onClose,
   wide = false,
+  className = '',
 }: {
   title: string
   children: ReactNode
   onClose(): void
   wide?: boolean
+  className?: string
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const titleId = useId()
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = dialog.current
     element?.showModal()
     return () => element?.close()
@@ -22,7 +24,7 @@ export function Dialog({
   return (
     <dialog
       ref={dialog}
-      className={`dialog ${wide ? 'dialog-wide' : ''}`}
+      className={`dialog ${wide ? 'dialog-wide' : ''} ${className}`}
       aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault()

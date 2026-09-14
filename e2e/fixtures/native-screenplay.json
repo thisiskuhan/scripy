@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "id": "desktop-smoke-screenplay",
+  "title": "The Quiet Hours",
+  "author": "Test Writer",
+  "draft": "First draft",
+  "logline": "An archivist follows a recording through the city.",
+  "createdAt": "2026-09-01T00:00:00.000Z",
+  "updatedAt": "2026-09-01T00:00:00.000Z",
+  "notes": { "rooftops": "Hold on the rooftops before we find Lena." },
+  "blocks": [
+    { "id": "rooftops", "kind": "scene", "text": "EXT. CITY ROOFTOPS - PRE-DAWN" },
+    { "id": "quiet", "kind": "action", "text": "The city holds its breath." },
+    {
+      "id": "streets",
+      "kind": "action",
+      "text": "A train traces a silver line through the sleeping streets."
+    },
+    { "id": "apartment", "kind": "scene", "text": "INT. LENA'S APARTMENT - PRE-DAWN" },
+    { "id": "recorder", "kind": "action", "text": "Lena sets the recorder beside a cup of tea." },
+    { "id": "cafe", "kind": "scene", "text": "EXT. CORNER CAFE - DAWN" },
+    { "id": "coffee", "kind": "action", "text": "Samir lifts a paper cup. Already made." },
+    { "id": "station", "kind": "scene", "text": "INT. CENTRAL STATION - MORNING" },
+    { "id": "tape", "kind": "action", "text": "Eli waits beneath the clock, holding a cassette." },
+    { "id": "archive", "kind": "scene", "text": "INT. ARCHIVE ROOM - MORNING" },
+    { "id": "listen", "kind": "action", "text": "Lena puts on her headphones and listens." },
+    { "id": "river", "kind": "scene", "text": "EXT. RIVER WALK - MORNING" },
+    { "id": "walk", "kind": "action", "text": "They keep walking. The city carries on around them." },
+    { "id": "end", "kind": "transition", "text": "FADE OUT." }
+  ]
+}

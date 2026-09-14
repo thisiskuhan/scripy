@@ -7,11 +7,18 @@ export default defineConfig({
   plugins: [react()],
   optimizeDeps: { include: ['jspdf'] },
   worker: { format: 'es' },
+  build: { rollupOptions: { input: ['index.html', 'privacy.html'] } },
   server: {
     host: '127.0.0.1',
     port: 7457,
     strictPort: true,
+    headers: { 'Cross-Origin-Opener-Policy': 'same-origin-allow-popups' },
     watch: { ignored: ['**/release/**', '**/test-results/**', '**/playwright-report/**'] },
   },
-  preview: { host: '127.0.0.1', port: 7457, strictPort: true },
+  preview: {
+    host: '127.0.0.1',
+    port: 7457,
+    strictPort: true,
+    headers: { 'Cross-Origin-Opener-Policy': 'same-origin-allow-popups' },
+  },
 })

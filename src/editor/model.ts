@@ -35,6 +35,16 @@ export const screenplaySchema = new Schema({
     },
     text: { group: 'inline' },
   },
+  marks: {
+    passageNote: {
+      attrs: { id: {} },
+      inclusive: false,
+      excludes: '',
+      toDOM(mark) {
+        return ['span', { 'data-note-id': mark.attrs.id }, 0]
+      },
+    },
+  },
 })
 
 export function toEditorDoc(blocks: ScriptBlock[]): ProseMirrorNode {

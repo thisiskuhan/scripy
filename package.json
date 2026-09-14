@@ -1,7 +1,7 @@
 {
   "name": "scripy",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "A local-first screenplay writing studio",
   "main": "electron/main.cjs",
   "type": "module",
@@ -12,8 +12,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:responsive": "playwright test --config playwright.responsive.config.ts",
+    "icons:generate": "node scripts/generate-favicons.mjs",
     "test:desktop": "npm run build && node scripts/smoke-desktop.mjs",
     "test:native": "npm run build && node scripts/verify-native-workflows.mjs",
+    "test:instances": "npm run build && node scripts/verify-multi-instance.mjs",
+    "test:desktop-ui": "npm run build && node scripts/verify-desktop-ui.mjs",
     "test:portable": "node scripts/verify-portable.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -21,7 +25,7 @@
     "desktop:dev": "node electron/dev.mjs",
     "desktop:pack": "npm run build && electron-builder --dir",
     "desktop:dist": "npm run build && electron-builder",
-    "desktop:dist:linux": "npm run build && electron-builder --linux AppImage tar.gz",
+    "desktop:dist:linux": "npm run build && electron-builder --linux AppImage tar.gz deb",
     "desktop:dist:win": "npm run build && electron-builder --win nsis",
     "desktop:dist:mac": "npm run build && electron-builder --mac dmg zip",
     "desktop:install": "node scripts/install-linux.mjs",
@@ -32,7 +36,7 @@
     "appId": "studio.scripy.app",
     "productName": "Scripy",
     "directories": {
-      "output": "release/0.5.1"
+      "output": "release/0.6.1"
     },
     "files": [
       "dist/**/*",
@@ -40,7 +44,7 @@
       "electron/preload.cjs",
       "electron/files.cjs",
       "electron/open-requests.cjs",
-      "!node_modules/**/*"
+      "!node_modules/!(proper-lockfile|graceful-fs|retry|signal-exit)/**/*"
     ],
     "asar": true,
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
@@ -57,8 +61,10 @@
     "linux": {
       "target": [
         "AppImage",
-        "tar.gz"
+        "tar.gz",
+        "deb"
       ],
+      "maintainer": "Kuhan S <84219402+thisiskuhan@users.noreply.github.com>",
       "category": "Office",
       "icon": "public/icon.png"
     },
@@ -78,14 +84,18 @@
     }
   },
   "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
     "@fontsource/courier-prime": "^5.3.0",
     "@fontsource/dm-sans": "^5.3.0",
     "@fontsource/newsreader": "^5.3.0",
+    "@react-oauth/google": "^0.13.5",
     "fast-png": "^6.4.0",
     "fountain-js": "^1.2.4",
     "idb": "^8.0.3",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.45.0",
+    "motion": "^13.2.0",
+    "proper-lockfile": "^4.1.2",
     "prosemirror-commands": "^1.7.2",
     "prosemirror-history": "^1.5.0",
     "prosemirror-inputrules": "^1.5.1",
@@ -114,7 +124,9 @@
     "globals": "^15.13.0",
     "jsdom": "^29.1.1",
     "pdfjs-dist": "^6.3.289",
+    "png-to-ico": "^3.0.2",
     "prettier": "^3.9.6",
+    "sharp": "^0.35.4",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.18.1",
     "vite": "^6.0.3",

@@ -9,7 +9,17 @@ describe('portable Scripy document format', () => {
     original.notes[original.blocks[0].id] = 'A note to preserve.'
     const legacy = { ...original, version: 1, paperSize: undefined, titleArtwork: undefined }
     const migrated = parseProject(JSON.stringify(legacy))
-    expect(migrated).toEqual({ ...original, version: 2, paperSize: 'letter', titleArtwork: null })
+    expect(migrated).toEqual({ ...original, version: 3, paperSize: 'letter', titleArtwork: null })
+  })
+
+  it('migrates version-2 files without losing artwork, notes, or paper size', () => {
+    const original = createScreenplay('An existing screenplay')
+    original.paperSize = 'a4'
+    const legacy = { ...original, version: 2, annotations: undefined }
+    expect(parseProject(JSON.stringify(legacy))).toEqual(original)
+    expect(() => parseProject(JSON.stringify({ ...original, annotations: undefined }))).toThrow(
+      'passage notes',
+    )
   })
 
   it('round-trips A4 and embedded title artwork separately from script elements', () => {

@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useDeferredValue, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react'
 import { version as appVersion } from '../package.json'
 import {
   ArrowDown,
@@ -7,6 +7,8 @@ import {
   ArrowUp,
   Check,
   CheckCheck,
+  CloudDownload,
+  CloudUpload,
   ChevronDown,
   ChevronRight,
   Download,
@@ -21,14 +23,17 @@ import {
   LayoutGrid,
   List,
   LoaderCircle,
+  LogOut,
   Maximize2,
   Minimize2,
   Menu,
   MessageSquare,
+  MessageSquarePlus,
   Monitor,
   Moon,
   MoreHorizontal,
   PanelLeftClose,
+  PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
   Plus,
@@ -40,6 +45,7 @@ import {
   Sun,
   Type,
   Undo2,
+  Upload,
   Users,
   X,
   type LucideIcon,
@@ -71,11 +77,9 @@ import { paginate, type ScriptLayout } from './lib/layout'
 import { PAPER_LABELS, PAPER_SIZES, paperMetrics, type PaperSize } from './lib/paper'
 import type { TitleArtwork } from './lib/artwork'
 import {
-  loadActiveProject,
-  listProjects,
-  listSnapshots,
-  saveProject,
-  writeEmergency,
+  createDocumentStorage,
+  localDocumentStorage,
+  type DocumentStorage,
   type Snapshot,
 } from './lib/storage'
 import { sampleScreenplay } from './lib/sample'
@@ -84,8 +88,22 @@ import { chooseReopenedDraft } from './lib/reopen'
 import { exportPdf } from './lib/pdf-export'
 import { useTheme, type Appearance } from './lib/useTheme'
 import { useFullscreen } from './lib/useFullscreen'
+import { PassageNoteForm, type NoteValues } from './components/PassageNoteForm'
+import { PassageNoteList } from './components/PassageNoteList'
+import { NotesView } from './components/NotesView'
+import { passageText, type PassageNote, type PassageSelection } from './lib/annotations'
+import { SidebarResizeHandle } from './components/SidebarResizeHandle'
+import { SceneMemoField } from './components/SceneMemoField'
+import { DEFAULT_PANEL_LAYOUT, panelBounds } from './lib/panels'
+import { usePanels } from './lib/usePanels'
+import { BrowserSession } from './components/BrowserSession'
+import { CLOUD_FEATURES_ENABLED, DESKTOP_APP_URL } from './lib/deployment'
+import { HomePage } from './components/HomePage'
+import type { GoogleSession } from './lib/google-auth'
+import { createGoogleDrive, type GoogleDrive } from './lib/google-drive'
+import { DriveFilesDialog } from './components/DriveFilesDialog'
 
-type Modal = 'new' | 'details' | 'export' | 'history' | 'projects' | 'settings' | null
+type Modal = 'new' | 'details' | 'export' | 'history' | 'projects' | 'settings' | 'note' | 'drive' | null
 interface Preferences {
   zoom: string
   sceneNumbers: boolean
@@ -102,44 +120,45 @@ interface StartupDocument {
   project: Screenplay
   warning: string
   recovered: boolean
+  hasDocument: boolean
 }
-let boot: Promise<StartupDocument> | undefined
-
-function initialDocument() {
-  boot ??= loadActiveProject()
-    .then(async (stored) => {
-      let project = stored ?? sampleScreenplay()
-      if (!stored) await saveProject(project, true, 'Initial draft')
-      let warning = ''
-      let recovered = false
-      if (stored && window.scripyDesktop) {
-        try {
-          const file = await window.scripyDesktop.reopenDocument(stored.id)
-          if (file?.token) {
-            const disk = parseProject(file.content)
-            const choice = chooseReopenedDraft(stored, disk, file.changedOnDisk)
-            if (choice.preserveRecovery) await saveProject(stored, true, 'Before loading file from disk')
-            await window.scripyDesktop.bindDocument(file.token, disk.id)
-            project = choice.project
-            recovered = choice.recovered
-            await saveProject(project)
-            try {
-              writeEmergency(project)
-            } catch {
-              warning = 'Emergency recovery storage is unavailable; save a file copy regularly.'
-            }
-          }
-        } catch (error) {
-          warning = `The disk file could not be reopened. Your local recovery draft is shown. ${error instanceof Error ? error.message : 'Use Open or Save As to choose a file.'}`
-        }
+function initialDocument(storage: DocumentStorage) {
+  const { loadActiveProject, saveProject, writeEmergency } = storage
+  return loadActiveProject().then(async (stored) => {
+    if (!CLOUD_FEATURES_ENABLED)
+      return {
+        project: stored ?? createScreenplay('Untitled screenplay'),
+        warning: '',
+        recovered: false,
+        hasDocument: Boolean(stored),
       }
-      return { project, warning, recovered }
-    })
-    .catch((error: unknown) => {
-      boot = undefined
-      throw error
-    })
-  return boot
+    let project = stored ?? sampleScreenplay()
+    if (!stored) await saveProject(project, true, 'Initial draft')
+    let warning = ''
+    let recovered = false
+    if (stored && window.scripyDesktop) {
+      try {
+        const file = await window.scripyDesktop.reopenDocument(stored.id)
+        if (file?.token) {
+          const disk = parseProject(file.content)
+          const choice = chooseReopenedDraft(stored, disk, file.changedOnDisk)
+          if (choice.preserveRecovery) await saveProject(stored, true, 'Before loading file from disk')
+          await window.scripyDesktop.bindDocument(file.token, disk.id)
+          project = choice.project
+          recovered = choice.recovered
+          await saveProject(project)
+          try {
+            writeEmergency(project)
+          } catch {
+            warning = 'Emergency recovery storage is unavailable; save a file copy regularly.'
+          }
+        }
+      } catch (error) {
+        warning = `The disk file could not be reopened. Your local recovery draft is shown. ${error instanceof Error ? error.message : 'Use Open or Save As to choose a file.'}`
+      }
+    }
+    return { project, warning, recovered, hasDocument: true }
+  })
 }
 
 function IconButton({
@@ -149,6 +168,7 @@ function IconButton({
   active = false,
   disabled = false,
   className = '',
+  hint,
 }: {
   icon: LucideIcon
   label: string
@@ -156,12 +176,14 @@ function IconButton({
   active?: boolean
   disabled?: boolean
   className?: string
+  hint?: string
 }) {
   return (
     <button
       className={`icon-button ${active ? 'active' : ''} ${className}`}
       aria-label={label}
-      title={label}
+      title={hint ? `${label} (${hint})` : label}
+      aria-keyshortcuts={hint}
       aria-pressed={active || undefined}
       disabled={disabled}
       onClick={onClick}
@@ -201,16 +223,28 @@ async function download(data: string | ArrayBuffer, name: string, type: string) 
 
 function Workspace({
   initial,
+  hasInitialDocument,
   warning,
   recovered,
   appearance,
+  storage,
+  session,
+  onSignOut,
+  drive,
 }: {
   initial: Screenplay
+  hasInitialDocument: boolean
   warning: string
   recovered: boolean
   appearance: Appearance
+  storage: DocumentStorage
+  session?: GoogleSession
+  onSignOut?: () => void
+  drive?: GoogleDrive
 }) {
-  const doc = useDocument(initial, recovered)
+  const { listProjects, listSnapshots } = storage
+  const doc = useDocument(initial, recovered, storage, hasInitialDocument)
+  const panels = usePanels()
   const fullscreen = useFullscreen()
   const { project } = doc
   const editor = useRef<EditorHandle>(null)
@@ -218,13 +252,26 @@ function Workspace({
   const canvas = useRef<HTMLDivElement>(null)
   const findInput = useRef<HTMLInputElement>(null)
   const [revision, setRevision] = useState(0)
-  const [view, setView] = useState<'script' | 'outline'>('script')
+  const [view, setView] = useState<'script' | 'outline' | 'notes'>('script')
   const [sidebarTab, setSidebarTab] = useState<'scenes' | 'characters'>('scenes')
   const [sceneFilter, setSceneFilter] = useState('')
   const [mobileSidebar, setMobileSidebar] = useState(false)
   const [mobileNotes, setMobileNotes] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+  const [homeVisible, setHomeVisible] = useState(!CLOUD_FEATURES_ENABLED)
+  const [homeLoading, setHomeLoading] = useState(true)
+  const [homeError, setHomeError] = useState('')
+  const [homeAttempt, setHomeAttempt] = useState(0)
   const [modal, setModal] = useState<Modal>(null)
+  const [noteDraft, setNoteDraft] = useState<{
+    id: string
+    createdAt: string
+    initialText: string
+    note: PassageNote | null
+    selection: PassageSelection
+  } | null>(null)
+  const [activeNoteId, setActiveNoteId] = useState<string | null>(null)
+  const [deletingNote, setDeletingNote] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [dismissedError, setDismissedError] = useState('')
@@ -256,6 +303,7 @@ function Workspace({
     pages: layout.pageCount,
     canUndo: false,
     canRedo: false,
+    passage: null,
   })
   const [preferences, setPreferences] = useState<Preferences>(() => {
     try {
@@ -276,6 +324,11 @@ function Workspace({
   const totalWords = deferredBlocks.reduce((total, block) => total + wordCount(block.text), 0)
   const currentIndex = project.blocks.findIndex((block) => block.id === info.blockId)
   const activeScene = [...scenes].reverse().find((scene) => scene.start <= currentIndex) ?? scenes[0]
+  const noteSceneBlocks = new Set(
+    project.blocks
+      .slice(activeScene?.start ?? 0, activeScene?.end ?? project.blocks.length)
+      .map((block) => block.id),
+  )
   const filteredScenes = scenes.filter((scene) =>
     scene.heading.toLowerCase().includes(sceneFilter.toLowerCase()),
   )
@@ -285,27 +338,200 @@ function Workspace({
     Math.min(0.95, (availableWidth - (availableWidth < 600 ? 28 : 72)) / paper.width),
   )
   const zoom = preferences.zoom === 'fit' ? fitZoom : Number(preferences.zoom)
-  const notesVisible = window.innerWidth <= 1100 ? mobileNotes : preferences.inspector
+  const navigationVisible = panels.viewport <= 800 ? mobileSidebar : !panels.layout.navigationCollapsed
+  const notesVisible =
+    !focusMode && view !== 'notes' && preferences.inspector && (panels.viewport <= 1100 ? mobileNotes : true)
+  const sidebarSizes = panelBounds(panels.viewport, panels.layout, navigationVisible, notesVisible)
   const activeError =
     doc.error ||
     fullscreen.error ||
     operationError ||
     appearance.error ||
-    (!doc.writable ? 'This workspace is open in another tab. Editing is paused here.' : '')
+    (doc.waitingForWriter ? 'This workspace is open in another tab. Editing is paused here.' : '')
   useEffect(() => {
     if (!activeError) setDismissedError('')
   }, [activeError])
 
+  function toggleNavigation() {
+    if (panels.viewport <= 800) {
+      setMobileNotes(false)
+      setMobileSidebar((previous) => !previous)
+    } else
+      panels.setLayout((previous) => ({ ...previous, navigationCollapsed: !previous.navigationCollapsed }))
+  }
+
   function toggleNotes() {
+    setMobileSidebar(false)
+    if (view === 'notes') {
+      setView('script')
+      setPreferences((previous) => ({ ...previous, inspector: true }))
+      if (window.innerWidth <= 1100) setMobileNotes(true)
+      return
+    }
     if (window.innerWidth <= 1100) {
       setMobileNotes((value) => !value)
       setPreferences((value) => ({ ...value, inspector: true }))
     } else setPreferences((value) => ({ ...value, inspector: !value.inspector }))
   }
 
+  function editPassageNote(note: PassageNote | null = null, initialText = '') {
+    if (!doc.writable || busy || fileOperation.current) return
+    const sceneBlock = project.blocks.find((block) => block.id === activeScene?.id)
+    const selection = note
+      ? { quote: passageText(note, project.blocks), ranges: note.ranges }
+      : (info.passage ??
+        (sceneBlock?.text.trim()
+          ? {
+              quote: sceneBlock.text,
+              ranges: [{ blockId: sceneBlock.id, from: 0, to: sceneBlock.text.length }],
+            }
+          : null))
+    if (!selection) return
+    setToast('')
+    setNoteDraft({
+      id: note?.id ?? crypto.randomUUID(),
+      createdAt: note?.createdAt ?? new Date().toISOString(),
+      initialText,
+      note,
+      selection,
+    })
+    showModal('note')
+  }
+
+  function showNotesView() {
+    closeFind()
+    setMobileNotes(false)
+    setView('notes')
+  }
+
+  async function savePassageNote(values: NoteValues) {
+    if (!noteDraft || !doc.writable || fileOperation.current) return
+    const now = new Date().toISOString()
+    const note: PassageNote = {
+      id: noteDraft.id,
+      createdAt: noteDraft.createdAt,
+      updatedAt: now,
+      text: values.text,
+      departments: values.departments,
+      tags: values.tags,
+      resolved: values.resolved,
+      quote: values.selection.quote,
+      ranges: values.selection.ranges,
+    }
+    fileOperation.current = true
+    setBusy(true)
+    try {
+      if (
+        !doc.update((previous) => ({
+          ...previous,
+          annotations: previous.annotations.some((item) => item.id === note.id)
+            ? previous.annotations.map((item) => (item.id === note.id ? note : item))
+            : [...previous.annotations, note],
+        }))
+      )
+        return
+      editor.current?.markNote(note)
+      await doc.persist(true, 'Passage note saved')
+      setActiveNoteId(note.id)
+      setModal(null)
+      setNoteDraft(null)
+      setOperationError('')
+      setToast('Note saved.')
+    } catch (error) {
+      report(error)
+    } finally {
+      fileOperation.current = false
+      setBusy(false)
+    }
+  }
+
+  async function saveSceneMemo() {
+    if (!doc.writable || fileOperation.current) return
+    fileOperation.current = true
+    setBusy(true)
+    try {
+      await doc.persist(true, 'Scene memo saved')
+      setOperationError('')
+      setToast('Scene memo saved.')
+    } catch (error) {
+      report(error)
+    } finally {
+      fileOperation.current = false
+      setBusy(false)
+    }
+  }
+
+  function goToNote(note: PassageNote) {
+    setView('script')
+    setActiveNoteId(note.id)
+    setMobileNotes(false)
+    requestAnimationFrame(() => editor.current?.selectNote(note))
+  }
+
+  const noteActions = {
+    disabled: !doc.writable || busy || deletingNote,
+    onEdit: editPassageNote,
+    onGo: goToNote,
+    onResolve: (note: PassageNote) => {
+      if (!doc.writable) return
+      doc.update((previous) => ({
+        ...previous,
+        annotations: previous.annotations.map((item) =>
+          item.id === note.id
+            ? { ...item, resolved: !item.resolved, updatedAt: new Date().toISOString() }
+            : item,
+        ),
+      }))
+    },
+    onDelete: async (note: PassageNote) => {
+      if (!doc.writable || fileOperation.current) return
+      fileOperation.current = true
+      setDeletingNote(true)
+      try {
+        await doc.persist(true, 'Before deleting passage note', false)
+        if (
+          doc.update((previous) => ({
+            ...previous,
+            annotations: previous.annotations.filter((item) => item.id !== note.id),
+          }))
+        ) {
+          editor.current?.removeNote(note.id)
+          setToast('Note deleted.')
+        }
+      } catch (error) {
+        report(error)
+      } finally {
+        fileOperation.current = false
+        setDeletingNote(false)
+      }
+    },
+  }
+
   useEffect(() => {
-    document.title = `${project.title}${fileLocation ? ` - ${fileLocation.path}` : ''} - Scripy`
-  }, [project.title, fileLocation])
+    document.title = homeVisible
+      ? 'Home - Scripy'
+      : `${project.title}${fileLocation ? ` - ${fileLocation.path}` : ''} - Scripy`
+  }, [project.title, fileLocation, homeVisible])
+  useEffect(() => {
+    if (!homeVisible) return
+    let active = true
+    setHomeLoading(true)
+    setHomeError('')
+    void listProjects()
+      .then((items) => {
+        if (active) setProjects(items)
+      })
+      .catch((error) => {
+        if (active)
+          setHomeError(error instanceof Error ? error.message : 'Recent screenplays could not be loaded.')
+      })
+      .finally(() => {
+        if (active) setHomeLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [homeVisible, homeAttempt, listProjects, doc.generation])
   useEffect(() => {
     let active = true
     setFileLocation(null)
@@ -355,19 +581,38 @@ function Workspace({
     if (findOpen) setMatchCount(editor.current?.countMatches(query) ?? 0)
   }, [project.blocks, findOpen, query])
 
-  const actions = useRef<{ save(saveAs: boolean): void; find(): void; escape(): void }>({
+  function toggleFocus() {
+    setView('script')
+    setFocusMode((value) => !value)
+  }
+  function toggleTheme() {
+    if (!appearance.chooseTheme(appearance.theme === 'dark' ? 'light' : 'dark'))
+      setToast('Appearance changed, but the preference could not be saved.')
+  }
+  const actions = useRef<{
+    save(saveAs: boolean): void
+    find(): void
+    toggleFocus(): void
+    toggleTheme(): void
+    escape(): void
+  }>({
     save: () => {},
     find: () => {},
+    toggleFocus: () => {},
+    toggleTheme: () => {},
     escape: () => {},
   })
   actions.current = {
     save: (saveAs) => {
-      void saveFile(saveAs)
+      if (saveAs) void saveFile(true)
+      else void saveChanges()
     },
     find: () => {
       setView('script')
       setFindOpen(true)
     },
+    toggleFocus,
+    toggleTheme,
     escape: () => {
       setFocusMode(false)
       setMobileSidebar(false)
@@ -377,20 +622,44 @@ function Workspace({
     },
   }
   useEffect(() => {
+    if (homeVisible) return
     const keydown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
         event.preventDefault()
-        actions.current.save(event.shiftKey)
+        if (!event.repeat && !event.altKey) actions.current.save(event.shiftKey)
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault()
         actions.current.find()
       }
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        event.code === 'KeyF' &&
+        !document.querySelector('dialog[open]')
+      ) {
+        event.preventDefault()
+        if (!event.repeat) actions.current.toggleFocus()
+      }
+      if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.shiftKey &&
+        event.code === 'KeyT' &&
+        !document.querySelector('dialog[open]')
+      ) {
+        event.preventDefault()
+        if (!event.repeat) actions.current.toggleTheme()
+      }
       if (event.key === 'Escape' && !document.querySelector('dialog[open]')) actions.current.escape()
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [])
+  }, [homeVisible])
 
   function report(error: unknown) {
     setDismissedError('')
@@ -415,13 +684,19 @@ function Workspace({
     setModal(next)
     setConfirmSnapshot(null)
   }
-  async function switchTo(next: Screenplay, label?: string, acceptFile?: () => Promise<void>) {
-    await doc.switchProject(next, label, acceptFile)
+  async function switchTo(
+    next: Screenplay,
+    label?: string,
+    acceptFile?: () => Promise<void>,
+    writePreviousToDisk = !acceptFile,
+  ) {
+    await doc.switchProject(next, label, acceptFile, writePreviousToDisk)
     setRevision((value) => value + 1)
     setView('script')
     closeFind()
     setSceneFilter('')
     setModal(null)
+    setHomeVisible(false)
     setMobileSidebar(false)
     canvas.current?.scrollTo({ top: 0 })
   }
@@ -442,10 +717,36 @@ function Workspace({
       }
     } else fileInput.current?.click()
   }
-  async function importFile(content: string, name: string, nativeFile?: DesktopOpenResult) {
-    const next = /\.(fountain|txt)$/i.test(name)
+  async function importFile(
+    content: string,
+    name: string,
+    nativeFile?: DesktopOpenResult,
+    recovery?: Screenplay,
+    changedOnDisk = true,
+  ): Promise<string> {
+    let reopeningCurrentFile = false
+    if (nativeFile && window.scripyDesktop) {
+      const location = await window.scripyDesktop.getLocation(doc.current.current.id)
+      reopeningCurrentFile = location?.path === nativeFile.path
+      if (reopeningCurrentFile && !recovery) {
+        const reopened = await window.scripyDesktop.reopenDocument(doc.current.current.id)
+        if (!reopened) throw new Error('This file could not be reopened. Your current draft is unchanged.')
+        return importFile(
+          reopened.content,
+          reopened.name,
+          reopened,
+          doc.current.current,
+          reopened.changedOnDisk,
+        )
+      }
+    }
+    const disk = /\.(fountain|txt)$/i.test(name)
       ? importFountain(content, name.replace(/\.[^.]+$/, ''))
       : parseProject(content)
+    const choice = recovery && nativeFile ? chooseReopenedDraft(recovery, disk, changedOnDisk) : null
+    const next = choice?.project ?? disk
+    if (choice?.preserveRecovery && recovery)
+      await storage.saveProject(recovery, true, 'Before loading file from disk')
     const acceptFile = nativeFile
       ? async () => {
           const location = nativeFile.token
@@ -454,9 +755,14 @@ function Workspace({
           setFileLocation(location)
         }
       : undefined
-    await switchTo(next, 'Opened document', acceptFile)
+    if (recovery && serializeProject(next) === serializeProject(doc.current.current)) {
+      await acceptFile?.()
+      setModal(null)
+      setHomeVisible(false)
+    } else await switchTo(next, 'Imported document', acceptFile, !reopeningCurrentFile)
+    if (choice?.recovered) await doc.persist(true, 'Recovered local changes')
     setOperationError('')
-    setToast(`Opened ${name}`)
+    setToast(`Imported ${name}`)
     return next.id
   }
   const drainOpenRequests = useRef(async () => {})
@@ -494,6 +800,23 @@ function Workspace({
     void drainOpenRequests.current()
     return stop
   }, [doc.writable, busy, modal])
+  async function saveChanges() {
+    if (!doc.writable || fileOperation.current) return
+    fileOperation.current = true
+    setMenuOpen(false)
+    setToast('')
+    const snapshot = doc.current.current
+    try {
+      await doc.persist(true, 'Manual save')
+      setOperationError('')
+      if (doc.current.current === snapshot) setToast('Changes saved.')
+    } catch {
+      return
+    } finally {
+      fileOperation.current = false
+    }
+  }
+
   async function saveFile(saveAs = false) {
     if (!doc.writable || fileOperation.current) return
     fileOperation.current = true
@@ -558,16 +881,66 @@ function Workspace({
       setBusy(false)
     }
   }
+  async function goHome() {
+    if (busy || fileOperation.current) return
+    setBusy(true)
+    try {
+      await doc.persist(true, 'Before returning home')
+      setMenuOpen(false)
+      setToast('')
+      setFocusMode(false)
+      setMobileSidebar(false)
+      setMobileNotes(false)
+      closeFind()
+      setHomeVisible(true)
+    } catch (error) {
+      report(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  async function saveDriveCopy() {
+    if (!drive || !doc.writable || fileOperation.current) return
+    fileOperation.current = true
+    setBusy(true)
+    setMenuOpen(false)
+    const snapshot = doc.current.current
+    try {
+      await doc.persist(true, 'Before saving a Drive copy')
+      await drive.saveCopy(snapshot)
+      setOperationError('')
+      setToast('Copy saved to Google Drive.')
+    } catch (error) {
+      report(error)
+    } finally {
+      fileOperation.current = false
+      setBusy(false)
+    }
+  }
   async function openStoredProject(item: Screenplay) {
+    if (!doc.writable) {
+      if (item.id === doc.current.current.id) setHomeVisible(false)
+      return
+    }
+    let warning = ''
     if (window.scripyDesktop) {
-      const file = await window.scripyDesktop.reopenDocument(item.id)
+      let file: DesktopReopenResult | null = null
+      try {
+        file = await window.scripyDesktop.reopenDocument(item.id)
+      } catch (error) {
+        warning = `The disk file could not be reopened. Your local recovery draft is shown. ${error instanceof Error ? error.message : 'Use Open file or Save as to choose a location.'}`
+      }
       if (file) {
-        await importFile(file.content, file.name, file)
+        await importFile(file.content, file.name, file, item, file.changedOnDisk)
         return
       }
     }
     if (item.id !== doc.current.current.id) await switchTo(item)
-    else setModal(null)
+    else {
+      setModal(null)
+      setHomeVisible(false)
+    }
+    if (warning) report(new Error(warning))
   }
   function goToScene(id: string) {
     setView('script')
@@ -696,7 +1069,43 @@ function Workspace({
     notices.push({ id: 'workspace-status', message: toast, tone: 'success', dismiss: () => setToast('') })
 
   return (
-    <div className={`app ${focusMode ? 'focus-mode' : ''}`}>
+    <div
+      className={`app ${focusMode ? 'focus-mode' : ''} ${homeVisible ? 'home-open' : ''}`}
+      style={
+        {
+          '--navigation-width': `${sidebarSizes.navigation.width}px`,
+          '--notes-width': `${sidebarSizes.notes.width}px`,
+        } as CSSProperties
+      }
+    >
+      {homeVisible && (
+        <HomePage
+          appearance={appearance}
+          activeId={doc.hasDocument ? project.id : undefined}
+          projects={
+            doc.hasDocument
+              ? [project, ...projects.filter((item) => item.id !== project.id)].sort((first, second) =>
+                  second.updatedAt.localeCompare(first.updatedAt),
+                )
+              : projects
+          }
+          busy={busy}
+          loading={homeLoading}
+          writable={doc.writable}
+          error={homeError}
+          notices={notices}
+          modalOpen={modal !== null}
+          onNew={() => showModal('new')}
+          onOpen={() => void openFile()}
+          onSelect={(item) => {
+            setBusy(true)
+            void openStoredProject(item)
+              .catch(report)
+              .finally(() => setBusy(false))
+          }}
+          onRetry={() => setHomeAttempt((value) => value + 1)}
+        />
+      )}
       <input
         ref={fileInput}
         type="file"
@@ -723,13 +1132,17 @@ function Workspace({
           }
         }}
       />
-      <header className="app-header">
+      <header className="app-header" hidden={homeVisible}>
         <div className="brand">
           <Brand />
         </div>
         <div className="header-document">
-          <button className="breadcrumb" onClick={() => void openProjects()}>
-            Workspace
+          <button
+            className="breadcrumb"
+            onClick={() => void (CLOUD_FEATURES_ENABLED ? openProjects() : goHome())}
+            disabled={busy}
+          >
+            {CLOUD_FEATURES_ENABLED ? 'Workspace' : 'Home'}
           </button>
           <ChevronRight size={14} />
           <div className="document-menu-anchor">
@@ -755,8 +1168,8 @@ function Workspace({
                     New screenplay
                   </button>
                   <button role="menuitem" onClick={() => void openFile()} disabled={!doc.writable}>
-                    <FolderOpen size={16} />
-                    Open file
+                    <Upload size={16} />
+                    Import...
                   </button>
                   <button role="menuitem" onClick={() => void openProjects()}>
                     <LayoutGrid size={16} />
@@ -767,7 +1180,7 @@ function Workspace({
                     role="menuitem"
                     onClick={() => {
                       setMenuOpen(false)
-                      void saveFile()
+                      void (window.scripyDesktop ? saveFile() : saveChanges())
                     }}
                     disabled={!doc.writable}
                   >
@@ -782,9 +1195,29 @@ function Workspace({
                     }}
                     disabled={!doc.writable || busy}
                   >
-                    <FilePlus2 size={16} />
-                    Save as...
+                    {window.scripyDesktop ? <FilePlus2 size={16} /> : <Download size={16} />}
+                    {window.scripyDesktop ? 'Save as...' : 'Download copy'}
                   </button>
+                  {drive && (
+                    <>
+                      <button
+                        role="menuitem"
+                        disabled={busy || !doc.writable}
+                        onClick={() => void saveDriveCopy()}
+                      >
+                        <CloudUpload size={16} />
+                        Save copy to Google Drive
+                      </button>
+                      <button
+                        role="menuitem"
+                        disabled={busy || !doc.writable}
+                        onClick={() => showModal('drive')}
+                      >
+                        <CloudDownload size={16} />
+                        Open from Google Drive
+                      </button>
+                    </>
+                  )}
                   {fileLocation && (
                     <button
                       role="menuitem"
@@ -801,6 +1234,40 @@ function Workspace({
                     <Settings2 size={16} />
                     Document details
                   </button>
+                  {!window.scripyDesktop && (
+                    <>
+                      <div className="menu-rule" />
+                      <button
+                        role="menuitem"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          if (DESKTOP_APP_URL) window.open(DESKTOP_APP_URL, '_blank', 'noopener,noreferrer')
+                          else setToast('The desktop build link is coming soon.')
+                        }}
+                      >
+                        <HardDrive size={16} />
+                        Download local app
+                      </button>
+                      {session && (
+                        <button
+                          role="menuitem"
+                          disabled={busy}
+                          title={session.user.email}
+                          onClick={async () => {
+                            try {
+                              await doc.persist(true, 'Before signing out')
+                              onSignOut?.()
+                            } catch (error) {
+                              report(error)
+                            }
+                          }}
+                        >
+                          <LogOut size={16} />
+                          Sign out
+                        </button>
+                      )}
+                    </>
+                  )}
                 </div>
               </>
             )}
@@ -810,7 +1277,7 @@ function Workspace({
         <div className="header-actions">
           <span
             className={`save-indicator status-${doc.status}`}
-            title={doc.error || 'Local document status'}
+            title={doc.error || 'Autosave is on. Ctrl/Cmd+S saves immediately.'}
           >
             {doc.status === 'saving' ? (
               <LoaderCircle className="spin" size={14} />
@@ -825,7 +1292,9 @@ function Workspace({
                   ? fileLocation
                     ? 'Saved to file'
                     : 'Recovery saved'
-                  : 'All changes saved'
+                  : session
+                    ? 'Saved locally'
+                    : 'All changes saved'
                 : doc.status === 'saving'
                   ? 'Saving...'
                   : doc.status === 'error'
@@ -835,13 +1304,6 @@ function Workspace({
           </span>
           <span className="toolbar-divider desktop-only" />
           <IconButton icon={History} label="Recovery history" onClick={() => void openHistory()} />
-          <IconButton
-            icon={Save}
-            label="Save document"
-            onClick={() => void saveFile()}
-            disabled={!doc.writable}
-            className="desktop-only"
-          />
           <button className="button primary export-button" onClick={() => showModal('export')}>
             <Download size={15} />
             <span>Export</span>
@@ -849,7 +1311,7 @@ function Workspace({
         </div>
       </header>
 
-      <div className={`workspace ${mobileNotes ? 'mobile-notes-visible' : ''}`}>
+      <div className={`workspace ${mobileNotes ? 'mobile-notes-visible' : ''}`} hidden={homeVisible}>
         {mobileSidebar && (
           <button
             className="sidebar-backdrop"
@@ -864,259 +1326,302 @@ function Workspace({
             onClick={() => setMobileNotes(false)}
           />
         )}
-        <aside className={`sidebar ${mobileSidebar ? 'mobile-open' : ''}`} aria-label="Screenplay navigation">
-          <div className="sidebar-mobile-heading">
+        <aside
+          id="navigation-panel"
+          className={`sidebar ${mobileSidebar ? 'mobile-open' : ''}`}
+          aria-label="Screenplay navigation"
+          hidden={panels.viewport > 800 && panels.layout.navigationCollapsed}
+        >
+          <div className="sidebar-heading">
             <span>Screenplay</span>
-            <IconButton icon={X} label="Close navigation" onClick={() => setMobileSidebar(false)} />
-          </div>
-          <div className="project-heading">
-            <div className="eyebrow">
-              <Film size={12} /> SCREENPLAY{' '}
+            {panels.viewport <= 800 && (
               <IconButton
-                icon={MoreHorizontal}
-                label="Edit document details"
-                onClick={() => showModal('details')}
-                disabled={!doc.writable}
+                icon={PanelLeftClose}
+                label="Close navigation"
+                onClick={() => setMobileSidebar(false)}
+              />
+            )}
+          </div>
+          <div className="sidebar-scroll">
+            <div className="project-heading">
+              <div className="eyebrow">
+                <Film size={12} /> SCREENPLAY{' '}
+                <IconButton
+                  icon={MoreHorizontal}
+                  label="Edit document details"
+                  onClick={() => showModal('details')}
+                  disabled={!doc.writable}
+                />
+              </div>
+              <button className="project-title" onClick={() => showModal('details')} disabled={!doc.writable}>
+                {project.title}
+              </button>
+              <div className="project-subtitle">
+                {project.draft}
+                <span />
+                {layout.pageCount} pages
+              </div>
+            </div>
+            <div className="sidebar-tabs" role="tablist" aria-label="Navigation type">
+              <button
+                role="tab"
+                aria-selected={sidebarTab === 'scenes'}
+                className={sidebarTab === 'scenes' ? 'selected' : ''}
+                onClick={() => setSidebarTab('scenes')}
+              >
+                <List size={15} />
+                Scenes
+              </button>
+              <button
+                role="tab"
+                aria-selected={sidebarTab === 'characters'}
+                className={sidebarTab === 'characters' ? 'selected' : ''}
+                onClick={() => setSidebarTab('characters')}
+              >
+                <Users size={15} />
+                Characters
+              </button>
+            </div>
+            <div className="sidebar-search">
+              <Search size={14} />
+              <input
+                aria-label={sidebarTab === 'scenes' ? 'Filter scenes' : 'Filter characters'}
+                placeholder={sidebarTab === 'scenes' ? 'Find a scene...' : 'Find a character...'}
+                value={sceneFilter}
+                onChange={(event) => setSceneFilter(event.target.value)}
               />
             </div>
-            <button className="project-title" onClick={() => showModal('details')} disabled={!doc.writable}>
-              {project.title}
-            </button>
-            <div className="project-subtitle">
-              {project.draft}
-              <span />
-              {layout.pageCount} pages
+            <div className="section-label">
+              <span>
+                {sidebarTab === 'scenes' ? `${scenes.length} SCENES` : `${characters.length} CHARACTERS`}
+              </span>
+              {sidebarTab === 'scenes' && (
+                <IconButton icon={Plus} label="Add scene" onClick={addScene} disabled={!doc.writable} />
+              )}
             </div>
-          </div>
-          <div className="sidebar-tabs" role="tablist" aria-label="Navigation type">
-            <button
-              role="tab"
-              aria-selected={sidebarTab === 'scenes'}
-              className={sidebarTab === 'scenes' ? 'selected' : ''}
-              onClick={() => setSidebarTab('scenes')}
-            >
-              <List size={15} />
-              Scenes
-            </button>
-            <button
-              role="tab"
-              aria-selected={sidebarTab === 'characters'}
-              className={sidebarTab === 'characters' ? 'selected' : ''}
-              onClick={() => setSidebarTab('characters')}
-            >
-              <Users size={15} />
-              Characters
-            </button>
-          </div>
-          <div className="sidebar-search">
-            <Search size={14} />
-            <input
-              aria-label={sidebarTab === 'scenes' ? 'Filter scenes' : 'Filter characters'}
-              placeholder={sidebarTab === 'scenes' ? 'Find a scene...' : 'Find a character...'}
-              value={sceneFilter}
-              onChange={(event) => setSceneFilter(event.target.value)}
-            />
-          </div>
-          <div className="section-label">
-            <span>
-              {sidebarTab === 'scenes' ? `${scenes.length} SCENES` : `${characters.length} CHARACTERS`}
-            </span>
-            {sidebarTab === 'scenes' && (
-              <IconButton icon={Plus} label="Add scene" onClick={addScene} disabled={!doc.writable} />
-            )}
-          </div>
-          <div className="navigation-list">
-            {sidebarTab === 'scenes'
-              ? filteredScenes.map((scene) => (
-                  <button
-                    className={`scene-row ${scene.id === activeScene?.id ? 'selected' : ''}`}
-                    key={scene.id}
-                    onClick={() => goToScene(scene.id)}
-                    title={scene.heading}
-                    aria-current={scene.id === activeScene?.id ? 'location' : undefined}
-                  >
-                    <span className="scene-index">{String(scene.number).padStart(2, '0')}</span>
-                    <span className="scene-row-copy">
-                      <span className="scene-location">{scene.location}</span>
-                      <span className="scene-time">
-                        {scene.time || 'Unspecified'}
-                        <span className="scene-page">p. {layout.blockPages.get(scene.id) ?? 1}</span>
-                      </span>
-                    </span>
-                    <span className="scene-active-dot" />
-                  </button>
-                ))
-              : characters
-                  .filter((character) => character.name.toLowerCase().includes(sceneFilter.toLowerCase()))
-                  .map((character, index) => (
+            <div className="navigation-list">
+              {sidebarTab === 'scenes'
+                ? filteredScenes.map((scene) => (
                     <button
-                      className="character-row"
-                      key={character.name}
-                      onClick={() => {
-                        const block = project.blocks.find(
-                          (item) => item.kind === 'character' && item.text.startsWith(character.name),
-                        )
-                        if (block) goToScene(block.id)
-                      }}
+                      className={`scene-row ${scene.id === activeScene?.id ? 'selected' : ''}`}
+                      key={scene.id}
+                      onClick={() => goToScene(scene.id)}
+                      title={scene.heading}
+                      aria-current={scene.id === activeScene?.id ? 'location' : undefined}
                     >
-                      <span className={`character-avatar avatar-${index % 4}`}>{character.name[0]}</span>
-                      <span>
-                        <strong>{character.name}</strong>
-                        <small>
-                          {character.cues} cues<span> / </span>
-                          {character.words} words
-                        </small>
+                      <span className="scene-index">{String(scene.number).padStart(2, '0')}</span>
+                      <span className="scene-row-copy">
+                        <span className="scene-location">{scene.location}</span>
+                        <span className="scene-time">
+                          {scene.time || 'Unspecified'}
+                          <span className="scene-page">p. {layout.blockPages.get(scene.id) ?? 1}</span>
+                        </span>
                       </span>
+                      <span className="scene-active-dot" />
                     </button>
-                  ))}
-            {sidebarTab === 'scenes' && !filteredScenes.length && (
-              <p className="empty-label">{scenes.length ? 'No matching scenes.' : 'No scenes yet.'}</p>
-            )}
-            {sidebarTab === 'characters' && !characters.length && (
-              <p className="empty-label">No characters yet.</p>
-            )}
-          </div>
-          <div className="sidebar-bottom">
-            <button className="new-document-button" disabled={!doc.writable} onClick={() => showModal('new')}>
-              <Plus size={16} />
-              New screenplay
-            </button>
-            <div className="local-workspace">
-              <HardDrive size={15} />
-              <span>Local workspace</span>
-              <IconButton icon={Settings2} label="Editor preferences" onClick={() => showModal('settings')} />
+                  ))
+                : characters
+                    .filter((character) => character.name.toLowerCase().includes(sceneFilter.toLowerCase()))
+                    .map((character, index) => (
+                      <button
+                        className="character-row"
+                        key={character.name}
+                        onClick={() => {
+                          const block = project.blocks.find(
+                            (item) => item.kind === 'character' && item.text.startsWith(character.name),
+                          )
+                          if (block) goToScene(block.id)
+                        }}
+                      >
+                        <span className={`character-avatar avatar-${index % 4}`}>{character.name[0]}</span>
+                        <span>
+                          <strong>{character.name}</strong>
+                          <small>
+                            {character.cues} cues<span> / </span>
+                            {character.words} words
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+              {sidebarTab === 'scenes' && !filteredScenes.length && (
+                <p className="empty-label">{scenes.length ? 'No matching scenes.' : 'No scenes yet.'}</p>
+              )}
+              {sidebarTab === 'characters' && !characters.length && (
+                <p className="empty-label">No characters yet.</p>
+              )}
+            </div>
+            <div className="sidebar-bottom">
+              <button
+                className="new-document-button"
+                disabled={!doc.writable}
+                onClick={() => showModal('new')}
+              >
+                <Plus size={16} />
+                New screenplay
+              </button>
+              <div className="local-workspace">
+                <HardDrive size={15} />
+                <span>Local workspace</span>
+                <IconButton
+                  icon={Settings2}
+                  label="Editor preferences"
+                  onClick={() => showModal('settings')}
+                />
+              </div>
             </div>
           </div>
+          <SidebarResizeHandle
+            side="navigation"
+            bounds={sidebarSizes.navigation}
+            defaultWidth={DEFAULT_PANEL_LAYOUT.navigationWidth}
+            controls="navigation-panel"
+            onResize={(navigationWidth) => panels.setLayout((previous) => ({ ...previous, navigationWidth }))}
+          />
         </aside>
 
         <main className="main-panel">
-          <div className="view-bar">
-            <div className="view-bar-left">
-              <IconButton
-                icon={Menu}
-                label="Open navigation"
-                onClick={() => setMobileSidebar(true)}
-                className="mobile-only"
-              />
-              <div className="view-tabs" role="tablist" aria-label="Document view">
-                <button
-                  role="tab"
-                  aria-selected={view === 'script'}
-                  className={view === 'script' ? 'selected' : ''}
-                  onClick={() => setView('script')}
-                >
-                  <FileText size={16} />
-                  Script
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={view === 'outline'}
-                  className={view === 'outline' ? 'selected' : ''}
-                  onClick={() => setView('outline')}
-                >
-                  <LayoutGrid size={16} />
-                  Outline
-                </button>
+          <div className="editor-controls">
+            <div className="view-bar">
+              <div className="view-bar-left">
+                <IconButton
+                  icon={navigationVisible ? PanelLeftClose : panels.viewport <= 800 ? Menu : PanelLeftOpen}
+                  label={navigationVisible ? 'Hide navigation' : 'Open navigation'}
+                  onClick={toggleNavigation}
+                  active={navigationVisible}
+                />
+                <div className="view-tabs" role="tablist" aria-label="Document view">
+                  <button
+                    role="tab"
+                    aria-selected={view === 'script'}
+                    className={view === 'script' ? 'selected' : ''}
+                    onClick={() => setView('script')}
+                  >
+                    <FileText size={16} />
+                    Script
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={view === 'outline'}
+                    className={view === 'outline' ? 'selected' : ''}
+                    onClick={() => setView('outline')}
+                  >
+                    <LayoutGrid size={16} />
+                    Outline
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={view === 'notes'}
+                    className={view === 'notes' ? 'selected' : ''}
+                    onClick={showNotesView}
+                  >
+                    <MessageSquare size={16} />
+                    Notes
+                  </button>
+                </div>
+              </div>
+              <div className="view-actions">
+                <IconButton
+                  icon={fullscreen.active ? Minimize2 : Maximize2}
+                  label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'}
+                  hint="F11"
+                  active={fullscreen.active}
+                  disabled={fullscreen.pending || !fullscreen.supported}
+                  onClick={() => void fullscreen.toggle()}
+                />
+                <IconButton
+                  icon={appearance.theme === 'dark' ? Sun : Moon}
+                  label={appearance.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+                  hint="Alt+T"
+                  onClick={toggleTheme}
+                />
+                <IconButton
+                  icon={Focus}
+                  label={focusMode ? 'Exit focus mode' : 'Focus mode'}
+                  hint="Alt+F"
+                  active={focusMode}
+                  onClick={toggleFocus}
+                />
+                <IconButton
+                  icon={notesVisible ? PanelRightClose : PanelRightOpen}
+                  label={notesVisible ? 'Hide scene notes' : 'Show scene notes'}
+                  active={notesVisible}
+                  onClick={toggleNotes}
+                />
               </div>
             </div>
-            <div className="view-actions">
+            <div className="editor-toolbar" hidden={view === 'notes'}>
+              <div className="element-selector">
+                <Type size={15} />
+                <select
+                  aria-label="Screenplay element"
+                  value={info.kind}
+                  disabled={!doc.writable || view !== 'script'}
+                  onChange={(event) => editor.current?.setKind(event.target.value as ElementKind)}
+                >
+                  {ELEMENTS.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {ELEMENT_LABELS[kind]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <span className="toolbar-divider" />
               <IconButton
-                icon={fullscreen.active ? Minimize2 : Maximize2}
-                label={fullscreen.active ? 'Exit fullscreen' : 'Enter fullscreen'}
-                active={fullscreen.active}
-                disabled={fullscreen.pending || !fullscreen.supported}
-                onClick={() => void fullscreen.toggle()}
+                icon={Undo2}
+                label="Undo"
+                disabled={!doc.writable || !info.canUndo}
+                onClick={() => editor.current?.undo()}
               />
               <IconButton
-                icon={appearance.theme === 'dark' ? Sun : Moon}
-                label={appearance.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-                onClick={() => {
-                  if (!appearance.chooseTheme(appearance.theme === 'dark' ? 'light' : 'dark'))
-                    setToast('Appearance changed, but the preference could not be saved.')
-                }}
+                icon={Redo2}
+                label="Redo"
+                disabled={!doc.writable || !info.canRedo}
+                onClick={() => editor.current?.redo()}
               />
+              <span className="toolbar-divider" />
               <IconButton
-                icon={Focus}
-                label={focusMode ? 'Exit focus mode' : 'Focus mode'}
-                active={focusMode}
+                icon={Search}
+                label="Find and replace"
+                active={findOpen}
                 onClick={() => {
                   setView('script')
-                  setFocusMode(!focusMode)
+                  if (findOpen) closeFind()
+                  else setFindOpen(true)
                 }}
               />
               <IconButton
-                icon={notesVisible ? PanelRightClose : PanelRightOpen}
-                label={notesVisible ? 'Hide scene notes' : 'Show scene notes'}
-                active={notesVisible}
-                onClick={toggleNotes}
+                icon={MessageSquarePlus}
+                label="Add note"
+                active={Boolean(info.passage)}
+                disabled={!doc.writable || busy || !info.passage || view !== 'script'}
+                onClick={() => editPassageNote()}
               />
-            </div>
-          </div>
-          <div className="editor-toolbar">
-            <div className="element-selector">
-              <Type size={15} />
-              <select
-                aria-label="Screenplay element"
-                value={info.kind}
-                disabled={!doc.writable || view !== 'script'}
-                onChange={(event) => editor.current?.setKind(event.target.value as ElementKind)}
-              >
-                {ELEMENTS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {ELEMENT_LABELS[kind]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <span className="toolbar-divider" />
-            <IconButton
-              icon={Undo2}
-              label="Undo"
-              disabled={!doc.writable || !info.canUndo}
-              onClick={() => editor.current?.undo()}
-            />
-            <IconButton
-              icon={Redo2}
-              label="Redo"
-              disabled={!doc.writable || !info.canRedo}
-              onClick={() => editor.current?.redo()}
-            />
-            <span className="toolbar-divider" />
-            <IconButton
-              icon={Search}
-              label="Find and replace"
-              active={findOpen}
-              onClick={() => {
-                setView('script')
-                if (findOpen) closeFind()
-                else setFindOpen(true)
-              }}
-            />
-            <span className="typeface-label">
-              Courier Prime<span>12 pt</span>
-            </span>
-            <div className="toolbar-right">
-              <label className="zoom-selector">
-                <Maximize2 size={14} />
-                <select
-                  aria-label="Page zoom"
-                  value={preferences.zoom}
-                  onChange={(event) => setPreferences((value) => ({ ...value, zoom: event.target.value }))}
+              <span className="typeface-label">
+                Courier Prime<span>12 pt</span>
+              </span>
+              <div className="toolbar-right">
+                <label className="zoom-selector">
+                  <Maximize2 size={14} />
+                  <select
+                    aria-label="Page zoom"
+                    value={preferences.zoom}
+                    onChange={(event) => setPreferences((value) => ({ ...value, zoom: event.target.value }))}
+                  >
+                    <option value="fit">Fit</option>
+                    <option value="0.75">75%</option>
+                    <option value="1">100%</option>
+                    <option value="1.25">125%</option>
+                  </select>
+                </label>
+                <button
+                  className="paper-size"
+                  title="Page setup"
+                  onClick={() => showModal('details')}
+                  disabled={!doc.writable}
                 >
-                  <option value="fit">Fit</option>
-                  <option value="0.75">75%</option>
-                  <option value="1">100%</option>
-                  <option value="1.25">125%</option>
-                </select>
-              </label>
-              <button
-                className="paper-size"
-                title="Page setup"
-                onClick={() => showModal('details')}
-                disabled={!doc.writable}
-              >
-                {PAPER_LABELS[project.paperSize]}
-              </button>
+                  {PAPER_LABELS[project.paperSize]}
+                </button>
+              </div>
             </div>
           </div>
           {findOpen && (
@@ -1190,6 +1695,15 @@ function Workspace({
           )}
 
           <div className="document-canvas" ref={canvas}>
+            <NotesView
+              key={project.id}
+              active={view === 'notes'}
+              project={project}
+              scenes={scenes}
+              canAdd={Boolean(info.passage)}
+              onAdd={() => editPassageNote()}
+              {...noteActions}
+            />
             <div className="script-view" hidden={view !== 'script'}>
               <div className="canvas-caption" style={{ maxWidth: paper.width * zoom }}>
                 <span>
@@ -1199,6 +1713,7 @@ function Workspace({
                 <span>SCREENPLAY</span>
               </div>
               <ScreenplayEditor
+                annotations={project.annotations}
                 ref={editor}
                 documentKey={`${project.id}:${revision}:${doc.generation}`}
                 paperSize={project.paperSize}
@@ -1211,6 +1726,12 @@ function Workspace({
                 onSelection={setInfo}
                 onLayout={setLayout}
                 onFind={() => setFindOpen(true)}
+                onAddNote={() => editPassageNote()}
+                onNoteClick={(id) => {
+                  setActiveNoteId(id)
+                  setPreferences((previous) => ({ ...previous, inspector: true }))
+                  if (window.innerWidth <= 1100) setMobileNotes(true)
+                }}
               />
               <div className="end-of-draft">
                 <span />
@@ -1305,109 +1826,182 @@ function Workspace({
           </div>
         </main>
 
-        {preferences.inspector && (
-          <aside className="inspector" aria-label="Scene notes">
-            <div className="inspector-heading">
-              <MessageSquare size={16} />
-              <h2>Scene notes</h2>
+        <aside id="notes-panel" className="inspector" aria-label="Scene notes" hidden={!notesVisible}>
+          <div className="inspector-heading">
+            <MessageSquare size={16} />
+            <h2>Scene notes</h2>
+            {panels.viewport <= 1100 && (
               <IconButton
                 icon={PanelRightClose}
                 label="Close scene notes"
                 onClick={() => setPreferences((value) => ({ ...value, inspector: false }))}
               />
-            </div>
-            <div className="inspector-content">
-              {activeScene ? (
-                <>
-                  <div className="scene-detail-eyebrow">
-                    <span>SCENE {String(activeScene.number).padStart(2, '0')}</span>
-                    <span>p. {layout.blockPages.get(activeScene.id) ?? 1}</span>
+            )}
+          </div>
+          <div className="inspector-content">
+            <section className="passage-panel" aria-label="Passage notes">
+              <div className="passage-panel-heading">
+                <h3>Passage notes</h3>
+                <IconButton icon={List} label="Browse all passage notes" onClick={showNotesView} />
+              </div>
+              {info.passage && <blockquote className="selection-quote">{info.passage.quote}</blockquote>}
+              <button
+                className="button primary small new-passage-note"
+                aria-label="Add passage note"
+                disabled={
+                  !doc.writable ||
+                  busy ||
+                  (!info.passage &&
+                    !project.blocks.find((block) => block.id === activeScene?.id)?.text.trim())
+                }
+                onClick={() => editPassageNote()}
+              >
+                <MessageSquarePlus size={15} />
+                Add note
+              </button>
+              <PassageNoteList
+                notes={project.annotations.filter(
+                  (note) =>
+                    note.id === activeNoteId ||
+                    note.ranges.some((range) => noteSceneBlocks.has(range.blockId)),
+                )}
+                project={project}
+                scenes={scenes}
+                activeId={activeNoteId}
+                {...noteActions}
+              />
+            </section>
+            {activeScene ? (
+              <>
+                <div className="scene-detail-eyebrow">
+                  <span>SCENE {String(activeScene.number).padStart(2, '0')}</span>
+                  <span>p. {layout.blockPages.get(activeScene.id) ?? 1}</span>
+                </div>
+                <h3>{activeScene.location}</h3>
+                <div className="scene-details-line">
+                  {activeScene.time.includes('NIGHT') || activeScene.time.includes('PRE-DAWN') ? (
+                    <Moon size={13} />
+                  ) : (
+                    <Sun size={13} />
+                  )}
+                  <span>{activeScene.time || 'Unspecified'}</span>
+                  <span className="detail-separator" />
+                  <span>{activeScene.words} words</span>
+                </div>
+                <div className="notes-area">
+                  <div className="scene-memo-heading">
+                    <label htmlFor="scene-notes">SCENE MEMO</label>
+                    <span aria-live="polite">
+                      {doc.status === 'saved'
+                        ? 'Saved'
+                        : doc.status === 'error'
+                          ? 'Save failed'
+                          : 'Saving...'}
+                    </span>
                   </div>
-                  <h3>{activeScene.location}</h3>
-                  <div className="scene-details-line">
-                    {activeScene.time.includes('NIGHT') || activeScene.time.includes('PRE-DAWN') ? (
-                      <Moon size={13} />
-                    ) : (
-                      <Sun size={13} />
-                    )}
-                    <span>{activeScene.time || 'Unspecified'}</span>
-                    <span className="detail-separator" />
-                    <span>{activeScene.words} words</span>
-                  </div>
-                  <div className="notes-area">
-                    <label htmlFor="scene-notes">NOTES</label>
-                    <textarea
-                      id="scene-notes"
-                      placeholder="Add a scene note..."
-                      value={project.notes[activeScene.id] ?? ''}
-                      maxLength={20000}
-                      disabled={!doc.writable}
-                      onChange={(event) => {
-                        const note = event.target.value
-                        doc.update((previous) => ({
+                  <SceneMemoField
+                    key={`${project.id}:${activeScene.id}:${revision}:${doc.generation}`}
+                    value={project.notes[activeScene.id] ?? ''}
+                    disabled={!doc.writable}
+                    onSave={() => void saveSceneMemo()}
+                    onChange={(note) =>
+                      doc.update(
+                        (previous) => ({
                           ...previous,
                           notes: { ...previous.notes, [activeScene.id]: note },
-                        }))
-                      }}
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="empty-label">No scene selected.</p>
-              )}
-              <div className="inspector-rule" />
-              <div className="overview-heading">
-                <span className="eyebrow">SCRIPT OVERVIEW</span>
-                <IconButton
-                  icon={Settings2}
-                  label="Edit screenplay information"
-                  onClick={() => showModal('details')}
-                  disabled={!doc.writable}
-                />
-              </div>
-              <dl className="script-stats">
-                <div>
-                  <dt>Scenes</dt>
-                  <dd>{scenes.length}</dd>
-                </div>
-                <div>
-                  <dt>Characters</dt>
-                  <dd>{characters.length}</dd>
-                </div>
-                <div>
-                  <dt>Word count</dt>
-                  <dd>{totalWords.toLocaleString()}</dd>
-                </div>
-                <div>
-                  <dt>Est. runtime</dt>
-                  <dd>~{layout.pageCount} min</dd>
-                </div>
-              </dl>
-              {project.logline && (
-                <div className="logline-section">
-                  <span className="eyebrow">LOGLINE</span>
-                  <p>{project.logline}</p>
-                </div>
-              )}
-              {project.title === 'The Quiet Hours' && (
-                <figure className="reference-photo">
-                  <img
-                    src={`${import.meta.env.BASE_URL}images/quiet-city.jpg`}
-                    alt="A quiet city street in the soft morning light"
+                        }),
+                        { immediate: true },
+                      )
+                    }
                   />
-                  <figcaption>
-                    <span>THE QUIET HOURS</span>
-                    <span>Visual reference</span>
-                  </figcaption>
-                </figure>
-              )}
+                  <div className="scene-memo-actions">
+                    <button
+                      className="button small"
+                      disabled={!doc.writable || busy}
+                      onClick={() => void saveSceneMemo()}
+                    >
+                      <Save size={14} />
+                      Save memo
+                    </button>
+                    <button
+                      className="button small"
+                      disabled={
+                        !doc.writable ||
+                        busy ||
+                        !project.notes[activeScene.id]?.trim() ||
+                        (!info.passage &&
+                          !project.blocks.find((block) => block.id === activeScene.id)?.text.trim())
+                      }
+                      onClick={() => editPassageNote(null, project.notes[activeScene.id] ?? '')}
+                    >
+                      <Users size={14} />
+                      Departments &amp; tags
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <p className="empty-label">No scene selected.</p>
+            )}
+            <div className="inspector-rule" />
+            <div className="overview-heading">
+              <span className="eyebrow">SCRIPT OVERVIEW</span>
+              <IconButton
+                icon={Settings2}
+                label="Edit screenplay information"
+                onClick={() => showModal('details')}
+                disabled={!doc.writable}
+              />
             </div>
-            <div className="inspector-footer">
-              <ShieldCheck size={14} />
-              {window.scripyDesktop ? 'On your device' : 'Stored in this browser'}
-            </div>
-          </aside>
-        )}
+            <dl className="script-stats">
+              <div>
+                <dt>Scenes</dt>
+                <dd>{scenes.length}</dd>
+              </div>
+              <div>
+                <dt>Characters</dt>
+                <dd>{characters.length}</dd>
+              </div>
+              <div>
+                <dt>Word count</dt>
+                <dd>{totalWords.toLocaleString()}</dd>
+              </div>
+              <div>
+                <dt>Est. runtime</dt>
+                <dd>~{layout.pageCount} min</dd>
+              </div>
+            </dl>
+            {project.logline && (
+              <div className="logline-section">
+                <span className="eyebrow">LOGLINE</span>
+                <p>{project.logline}</p>
+              </div>
+            )}
+            {project.title === 'The Quiet Hours' && (
+              <figure className="reference-photo">
+                <img
+                  src={`${import.meta.env.BASE_URL}images/quiet-city.jpg`}
+                  alt="A quiet city street in the soft morning light"
+                />
+                <figcaption>
+                  <span>THE QUIET HOURS</span>
+                  <span>Visual reference</span>
+                </figcaption>
+              </figure>
+            )}
+          </div>
+          <div className="inspector-footer">
+            <ShieldCheck size={14} />
+            {window.scripyDesktop ? 'On your device' : 'Stored in this browser'}
+          </div>
+          <SidebarResizeHandle
+            side="notes"
+            bounds={sidebarSizes.notes}
+            defaultWidth={DEFAULT_PANEL_LAYOUT.notesWidth}
+            controls="notes-panel"
+            onResize={(notesWidth) => panels.setLayout((previous) => ({ ...previous, notesWidth }))}
+          />
+        </aside>
       </div>
 
       <footer className="status-bar">
@@ -1446,74 +2040,101 @@ function Workspace({
           Exit focus
         </button>
       )}
-      <FloatingNotifications notices={notices} />
+      {!homeVisible && <FloatingNotifications notices={notices} />}
+
+      {modal === 'note' && noteDraft && (
+        <PassageNoteForm
+          key={noteDraft.id}
+          note={noteDraft.note}
+          initialText={noteDraft.initialText}
+          selection={noteDraft.selection}
+          alternateSelection={info.passage}
+          tags={[...new Set(project.annotations.flatMap((note) => note.tags))]}
+          departments={[...new Set(project.annotations.flatMap((note) => note.departments))]}
+          disabled={!doc.writable || busy}
+          saving={busy}
+          onSave={savePassageNote}
+          onClose={() => {
+            if (busy) return
+            setModal(null)
+            setNoteDraft(null)
+          }}
+        />
+      )}
 
       {(modal === 'new' || modal === 'details') && (
         <Dialog
           title={modal === 'new' ? 'A new screenplay' : 'Screenplay details'}
+          className="dialog-details"
           onClose={() => {
             if (!busy && !artworkBusy) setModal(null)
           }}
         >
-          <form onSubmit={(event) => void submitDetails(event)}>
-            <label className="field-label">
-              Title
-              <input
-                name="title"
-                required
-                maxLength={300}
-                autoFocus
-                placeholder="Untitled screenplay"
-                value={detailsTitle}
-                onChange={(event) => setDetailsTitle(event.target.value)}
-              />
-            </label>
-            <label className="field-label">
-              Written by
-              <input
-                name="author"
-                maxLength={300}
-                placeholder="Author name"
-                value={detailsAuthor}
-                onChange={(event) => setDetailsAuthor(event.target.value)}
-              />
-            </label>
-            {modal === 'details' && (
-              <>
+          <form className="details-form" onSubmit={(event) => void submitDetails(event)}>
+            <div className="details-content">
+              <div className="details-fields">
                 <label className="field-label">
-                  Draft
-                  <input name="draft" maxLength={100} defaultValue={project.draft} />
+                  Title
+                  <input
+                    name="title"
+                    required
+                    maxLength={300}
+                    autoFocus
+                    placeholder="Untitled screenplay"
+                    value={detailsTitle}
+                    onChange={(event) => setDetailsTitle(event.target.value)}
+                  />
                 </label>
                 <label className="field-label">
-                  Logline
-                  <textarea name="logline" maxLength={5000} rows={3} defaultValue={project.logline} />
+                  Written by
+                  <input
+                    name="author"
+                    maxLength={300}
+                    placeholder="Author name"
+                    value={detailsAuthor}
+                    onChange={(event) => setDetailsAuthor(event.target.value)}
+                  />
                 </label>
-              </>
-            )}
-            <label className="field-label">
-              Paper size
-              <select
-                aria-label="Paper size"
-                value={detailsPaperSize}
-                onChange={(event) => setDetailsPaperSize(event.target.value as PaperSize)}
-                disabled={busy || artworkBusy}
-              >
-                {PAPER_SIZES.map((size) => (
-                  <option value={size} key={size}>
-                    {PAPER_LABELS[size]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <TitleArtworkEditor
-              artwork={detailsArtwork}
-              title={detailsTitle}
-              author={detailsAuthor}
-              paperSize={detailsPaperSize}
-              disabled={busy || !doc.writable}
-              onChange={setDetailsArtwork}
-              onBusyChange={setArtworkBusy}
-            />
+                <div className="details-options">
+                  {modal === 'details' && (
+                    <label className="field-label">
+                      Draft
+                      <input name="draft" maxLength={100} defaultValue={project.draft} />
+                    </label>
+                  )}
+                  <label className="field-label">
+                    Paper size
+                    <select
+                      aria-label="Paper size"
+                      value={detailsPaperSize}
+                      onChange={(event) => setDetailsPaperSize(event.target.value as PaperSize)}
+                      disabled={busy || artworkBusy}
+                    >
+                      {PAPER_SIZES.map((size) => (
+                        <option value={size} key={size}>
+                          {PAPER_LABELS[size]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                {modal === 'details' && (
+                  <label className="field-label">
+                    Logline
+                    <textarea name="logline" maxLength={5000} rows={4} defaultValue={project.logline} />
+                  </label>
+                )}
+              </div>
+              <TitleArtworkEditor
+                artwork={detailsArtwork}
+                title={detailsTitle}
+                author={detailsAuthor}
+                paperSize={detailsPaperSize}
+                disabled={busy || !doc.writable}
+                onChange={setDetailsArtwork}
+                onBusyChange={setArtworkBusy}
+              />
+            </div>
             <div className="dialog-actions">
               <button
                 type="button"
@@ -1528,7 +2149,13 @@ function Workspace({
                 className="button primary"
                 disabled={busy || artworkBusy || !doc.writable}
               >
-                {busy ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}
+                {busy ? (
+                  <LoaderCircle size={15} className="spin" />
+                ) : modal === 'new' ? (
+                  <Plus size={15} />
+                ) : (
+                  <Save size={15} />
+                )}
                 {modal === 'new' ? 'Create screenplay' : 'Save details'}
               </button>
             </div>
@@ -1733,6 +2360,18 @@ function Workspace({
         </Dialog>
       )}
 
+      {modal === 'drive' && drive && (
+        <DriveFilesDialog
+          drive={drive}
+          onClose={() => setModal(null)}
+          onOpen={async (next, name) => {
+            await switchTo(next, 'Opened from Google Drive')
+            setOperationError('')
+            setToast(`Opened ${name} from Google Drive.`)
+          }}
+        />
+      )}
+
       {modal === 'projects' && (
         <Dialog
           title="My screenplays"
@@ -1900,14 +2539,27 @@ function Workspace({
   )
 }
 
-export default function App() {
-  const appearance = useTheme()
+function WorkspaceBoot({
+  appearance,
+  storage,
+  session,
+  onSignOut,
+  drive,
+}: {
+  appearance: Appearance
+  storage: DocumentStorage
+  session?: GoogleSession
+  onSignOut?: () => void
+  drive?: GoogleDrive
+}) {
   const [project, setProject] = useState<StartupDocument | null>(null)
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
+  const boot = useRef<Promise<StartupDocument> | null>(null)
   useEffect(() => {
     let active = true
-    void initialDocument()
+    boot.current ??= initialDocument(storage)
+    void boot.current
       .then((value) => {
         if (active) {
           setProject(value)
@@ -1920,14 +2572,19 @@ export default function App() {
     return () => {
       active = false
     }
-  }, [attempt])
+  }, [attempt, storage])
   if (project)
     return (
       <Workspace
         initial={project.project}
+        hasInitialDocument={project.hasDocument}
         warning={project.warning}
         recovered={project.recovered}
         appearance={appearance}
+        storage={storage}
+        session={session}
+        onSignOut={onSignOut}
+        drive={drive}
       />
     )
   return (
@@ -1944,6 +2601,7 @@ export default function App() {
             className="button primary"
             onClick={() => {
               setError('')
+              boot.current = null
               setAttempt((value) => value + 1)
             }}
           >
@@ -1954,5 +2612,48 @@ export default function App() {
         <LoaderCircle className="spin" size={20} aria-label="Opening screenplay" />
       )}
     </div>
+  )
+}
+
+function AccountWorkspace({
+  appearance,
+  session,
+  onSignOut,
+  onExpired,
+}: {
+  appearance: Appearance
+  session: GoogleSession
+  onSignOut: () => void
+  onExpired: () => void
+}) {
+  const [storage] = useState(() => createDocumentStorage(session.user.id))
+  const [drive] = useState(() => createGoogleDrive(session, onExpired))
+  return (
+    <WorkspaceBoot
+      appearance={appearance}
+      storage={storage}
+      session={session}
+      onSignOut={onSignOut}
+      drive={drive}
+    />
+  )
+}
+
+export default function App() {
+  const appearance = useTheme()
+  if (!CLOUD_FEATURES_ENABLED || window.scripyDesktop)
+    return <WorkspaceBoot appearance={appearance} storage={localDocumentStorage} />
+  return (
+    <BrowserSession appearance={appearance}>
+      {(session, signOut, expire) => (
+        <AccountWorkspace
+          key={session.user.id}
+          appearance={appearance}
+          session={session}
+          onSignOut={signOut}
+          onExpired={expire}
+        />
+      )}
+    </BrowserSession>
   )
 }

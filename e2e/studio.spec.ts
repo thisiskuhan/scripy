@@ -1,10 +1,12 @@
-import { expect, test, type Download, type Page } from '@playwright/test'
+import { expect, test, type Download, type Page } from './fixtures'
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 async function ready(page: Page) {
   await page.goto('/')
+  await expect(page.locator('.screenplay-editor')).toBeVisible()
   await expect(page.locator('.screenplay-editor')).toHaveAttribute('contenteditable', 'true')
   await page.evaluate(() => document.fonts.ready)
+  await expect(page.locator('.status-saved')).toBeAttached()
 }
 
 async function newScreenplay(page: Page, title = 'The Morning Train') {
@@ -87,11 +89,12 @@ test('exports a native document with stable scene identities and notes', async (
   await page.clock.setFixedTime(new Date('2026-09-14T12:34:56.789Z'))
   const sceneId = await page.locator('.screenplay-editor p').first().getAttribute('data-block-id')
   const downloadPromise = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Save document', exact: true }).click()
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Download copy', exact: true }).click()
   const download = await downloadPromise
   const project = JSON.parse((await downloadedText(download)).toString('utf8'))
   expect(download.suggestedFilename()).toBe('The Quiet Hours_2026-09-14_12-34-56-789Z.scripy')
-  expect(project.version).toBe(2)
+  expect(project.version).toBe(3)
   expect(project.blocks[0].id).toBe(sceneId)
   expect(project.notes[sceneId!]).toContain('Let the city be a character.')
   await page.clock.setFixedTime(new Date('2026-09-14T12:35:00.001Z'))
@@ -122,6 +125,48 @@ test('imports Fountain as literal text and rejects malformed project files', asy
   )
   await expect(page.locator('.screenplay-editor p[data-kind="dialogue"]')).toHaveText('At last.')
   expect(await page.evaluate(() => Object.hasOwn(window, 'scriptInjected'))).toBe(false)
+})
+
+test('imports a .scripy screenplay from the Document menu', async ({ page }) => {
+  await ready(page)
+  const now = new Date().toISOString()
+  const project = {
+    version: 1,
+    id: 'imported-from-menu',
+    title: 'Imported From Menu',
+    author: '',
+    draft: 'First draft',
+    logline: '',
+    createdAt: now,
+    updatedAt: now,
+    notes: {},
+    blocks: [
+      { id: 'scene', kind: 'scene', text: 'INT. NEW SCENE - NIGHT' },
+      { id: 'action', kind: 'action', text: 'A fresh page begins.' },
+    ],
+  }
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('menuitem', { name: 'Import...', exact: true }).click(),
+  ])
+  await chooser.setFiles({
+    name: 'from-menu.scripy',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(project)),
+  })
+  await expect(page.getByRole('status')).toContainText('Imported from-menu.scripy')
+  await expect(page.locator('.screenplay-editor')).toContainText('A fresh page begins.')
+  await expect(page.locator('.document-menu-button')).toContainText('Imported From Menu')
+})
+
+test('offers a local desktop app download from the Document menu', async ({ page }) => {
+  await ready(page)
+  await page.getByRole('button', { name: 'Document menu', exact: true }).click()
+  const download = page.getByRole('menuitem', { name: 'Download local app', exact: true })
+  await expect(download).toBeVisible()
+  await download.click()
+  await expect(page.getByRole('status')).toContainText('desktop build link is coming soon')
 })
 
 test('finds and replaces literal text with undo support', async ({ page }) => {

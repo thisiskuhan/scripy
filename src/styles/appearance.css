@@ -1,0 +1,455 @@
+.appearance-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0 0 23px;
+  min-width: 0;
+}
+.appearance-fieldset legend {
+  padding: 0;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.appearance-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f3f5f2;
+}
+.appearance-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  min-width: 0;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #647260;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.appearance-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.appearance-option.selected {
+  background: #fff;
+  color: #225a45;
+  border-color: #d7e2d6;
+  box-shadow: 0 1px 3px #2337290d;
+}
+.appearance-option:not(.selected):hover {
+  background: #e7ede5;
+}
+.appearance-option:focus-within {
+  outline: 2px solid #469b84;
+  outline-offset: 2px;
+}
+
+@media screen {
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+    --ink: #dce3da;
+    --muted: #adb8ab;
+    --subtle: #96a392;
+    --green: #9dceb1;
+    --green-dark: #b7dfc6;
+    --green-soft: #303f35;
+    --line: #39443b;
+    --paper: #2b302c;
+    --sidebar: #202622;
+    --surface: #222924;
+    --surface-raised: #2a322c;
+    --surface-hover: #303a32;
+    --input-surface: #1c241e;
+    --script-ink: #dde0d6;
+    --accent-ink: #19291f;
+    --outline: #acd8b7;
+    --warning: #e4c58b;
+    --error: #f0b0a0;
+    color: var(--ink);
+    background: #181c1a;
+    scrollbar-color: #546454 #202622;
+  }
+  :root[data-theme='dark'] :is(.app-header, .view-bar, .find-bar, .status-bar) {
+    background: #1e2420;
+    border-color: var(--line);
+  }
+  :root[data-theme='dark'] :is(.inspector, .editor-toolbar) {
+    background: var(--sidebar);
+    border-color: var(--line);
+  }
+  :root[data-theme='dark'] .document-canvas {
+    background-color: #181d19;
+    background-image: linear-gradient(90deg, #c4d4bd04 1px, transparent 1px);
+    scrollbar-color: #4f5f4e transparent;
+  }
+  :root[data-theme='dark'] .boot-screen {
+    background: #181c1a;
+  }
+  :root[data-theme='dark'] :is(.paper-sheet, .title-preview) {
+    background: var(--paper);
+    border-color: #414a3e;
+    color: var(--script-ink);
+    box-shadow:
+      0 3px 16px #080d0966,
+      0 1px 3px #080d0933;
+  }
+  :root[data-theme='dark'] :is(.screenplay-editor, .printed-page-number, .continuation-marker) {
+    color: var(--script-ink);
+    caret-color: #b6dfbd;
+  }
+  :root[data-theme='dark'] .screenplay-editor p:has(> .ProseMirror-trailingBreak:only-child)::after {
+    color: #a0ae98;
+  }
+  :root[data-theme='dark'] ::selection {
+    color: #edf4e8;
+    background: #405d48;
+  }
+  :root[data-theme='dark'] .screenplay-editor ::selection {
+    color: #edf4e8;
+    background: #45674d;
+  }
+  :root[data-theme='dark'] .search-match {
+    color: #fbebc5;
+    background: #665533;
+  }
+  :root[data-theme='dark'] :is(.document-menu, .character-suggestions, .dialog) {
+    color: var(--ink);
+    background: var(--surface-raised);
+    border-color: #4b5849;
+    box-shadow:
+      0 15px 50px #070c0980,
+      0 2px 6px #070c0940;
+  }
+  :root[data-theme='dark'] .dialog::backdrop {
+    background: #090e0bc4;
+  }
+  :root[data-theme='dark'] .sidebar-backdrop {
+    background: #090e0b9c;
+  }
+  :root[data-theme='dark'] :is(.button, .format-options button) {
+    color: var(--ink);
+    background: var(--surface-raised);
+    border-color: #53614f;
+  }
+  :root[data-theme='dark'] :is(.button:hover:not(:disabled), .format-options button:hover:not(:disabled)) {
+    background: #374434;
+    border-color: #7d9974;
+  }
+  :root[data-theme='dark'] :is(.button.primary, .brand-mark) {
+    background: var(--green);
+    color: var(--accent-ink);
+    border-color: var(--green);
+    box-shadow: none;
+  }
+  :root[data-theme='dark'] .button.primary:hover:not(:disabled) {
+    background: var(--green-dark);
+    border-color: var(--green-dark);
+  }
+  :root[data-theme='dark']
+    :is(.icon-button.active, .appearance-option.selected, .format-options button.selected) {
+    color: #c2e7c3;
+    background: #344837;
+    border-color: #81a67b;
+    box-shadow: none;
+  }
+  :root[data-theme='dark']
+    :is(
+      .icon-button:hover:not(:disabled),
+      .document-menu button:hover:not(:disabled),
+      .character-suggestions button:hover
+    ) {
+    color: #c3e5c0;
+    background: #3b4e39;
+  }
+  :root[data-theme='dark']
+    :is(
+      .sidebar-search,
+      .find-fields label,
+      .field-label input,
+      .field-label select,
+      .field-label textarea,
+      .notes-area textarea
+    ) {
+    color: var(--ink);
+    background: var(--input-surface);
+    border-color: #4b5947;
+  }
+  :root[data-theme='dark']
+    :is(.notes-area textarea:focus, .field-label input:focus, .field-label textarea:focus) {
+    background: #252f24;
+    border-color: #88b17a;
+  }
+  :root[data-theme='dark'] :is(.sidebar-search:focus-within, .find-fields label:focus-within) {
+    border-color: #88b17a;
+  }
+  :root[data-theme='dark'] .notes-area textarea:disabled {
+    background: #242b23;
+    color: var(--muted);
+  }
+  :root[data-theme='dark'] :is(input, textarea)::placeholder {
+    color: #a3af99;
+  }
+  :root[data-theme='dark'] :is(select, option) {
+    color: var(--ink);
+    background-color: var(--input-surface);
+  }
+  :root[data-theme='dark'] :is(.scene-row:hover, .character-row:hover, .project-list-item:hover) {
+    background: var(--surface-hover);
+  }
+  :root[data-theme='dark'] .scene-row.selected {
+    background: #324236;
+    border-left-color: #a0c88f;
+  }
+  :root[data-theme='dark'] .scene-row.selected :is(.scene-location, .scene-index) {
+    color: #c7e0bb;
+  }
+  :root[data-theme='dark'] .scene-row.selected .scene-active-dot {
+    background: #aed094;
+  }
+  :root[data-theme='dark']
+    :is(.sidebar-tabs button.selected, .view-tabs button.selected, .view-tabs button.selected svg) {
+    color: #b5d59d;
+    border-bottom-color: #a3c28c;
+  }
+  :root[data-theme='dark'] .new-document-button {
+    color: #bbc9ab;
+    border-color: #526349;
+  }
+  :root[data-theme='dark'] .new-document-button:hover:not(:disabled) {
+    color: #d0e4b9;
+    background: #34412c;
+    border-color: #90aa78;
+  }
+  :root[data-theme='dark'] .outline-card {
+    color: var(--ink);
+    background: #262e26;
+    border-color: #44503e;
+    border-top-color: #819b72;
+  }
+  :root[data-theme='dark'] .outline-card:nth-child(3n + 2) {
+    border-top-color: #829ba2;
+  }
+  :root[data-theme='dark'] .outline-card:nth-child(3n) {
+    border-top-color: #b09a77;
+  }
+  :root[data-theme='dark'] .outline-card:hover {
+    border-color: #839676;
+  }
+  :root[data-theme='dark']
+    :is(
+      .outline-card-bottom,
+      .snapshot-row,
+      .project-list-item,
+      .preference-row,
+      .preferences-footer,
+      .inspector-footer,
+      .title-artwork-section
+    ) {
+    border-color: var(--line);
+  }
+  :root[data-theme='dark']
+    :is(.toolbar-divider, .menu-rule, .inspector-rule, .status-separator, .end-of-draft > span) {
+    background: var(--line);
+  }
+  :root[data-theme='dark'] :is(.project-subtitle > span, .detail-separator) {
+    background: #77876a;
+  }
+  :root[data-theme='dark'] :is(.draft-dot, .connection-dot) {
+    background: #a5c389;
+  }
+  :root[data-theme='dark'] .connection-dot.warning {
+    background: var(--warning);
+  }
+  :root[data-theme='dark']
+    :is(
+      .scene-location,
+      .inspector h3,
+      .inspector-heading h2,
+      .script-stats dd,
+      .outline-scene-title,
+      .field-label,
+      .checkbox-label,
+      .preference-row > span
+    ) {
+    color: var(--ink);
+  }
+  :root[data-theme='dark']
+    :is(
+      .breadcrumb,
+      .draft-tag,
+      .icon-button,
+      .document-menu svg,
+      .eyebrow,
+      .project-subtitle,
+      .sidebar-tabs button,
+      .sidebar-search,
+      .section-label,
+      .scene-index,
+      .scene-time,
+      .scene-page,
+      .local-workspace,
+      .character-row small,
+      .character-row small span,
+      .view-tabs button,
+      .element-selector,
+      .element-selector select,
+      .typeface-label,
+      .typeface-label span,
+      .zoom-selector,
+      .zoom-selector select,
+      .paper-size,
+      .canvas-caption,
+      .canvas-caption > span:first-child,
+      .printed-page-number,
+      .end-of-draft,
+      .inspector-heading,
+      .scene-detail-eyebrow,
+      .scene-detail-eyebrow span:last-child,
+      .scene-details-line,
+      .scene-details-line svg,
+      .notes-area label,
+      .script-stats dt,
+      .logline-section p,
+      .reference-photo figcaption,
+      .reference-photo figcaption span:last-child,
+      .inspector-footer,
+      .status-bar,
+      .status-bar strong,
+      .outline-heading p,
+      .outline-heading p span,
+      .outline-card-top,
+      .outline-number,
+      .outline-preview,
+      .outline-note,
+      .outline-card-bottom > span,
+      .outline-card-bottom > span > span,
+      .empty-label,
+      .export-document > div > span,
+      .export-document > div > span > span,
+      .field-heading,
+      .export-spec,
+      .history-header,
+      .projects-heading,
+      .snapshot-row > div > span,
+      .snapshot-row small,
+      .project-list-item small,
+      .project-list-item small > span,
+      .project-list-item > svg,
+      .preference-row > span > svg,
+      .preferences-footer,
+      .preferences-footer > span > span,
+      .boot-screen > svg,
+      .appearance-option
+    ) {
+    color: var(--muted);
+  }
+  :root[data-theme='dark'] .draft-tag {
+    border-color: #4a5541;
+  }
+  :root[data-theme='dark'] :is(.appearance-options, .export-filename) {
+    background: #1f281e;
+    color: #c5d1b7;
+    border-color: #46543d;
+  }
+  :root[data-theme='dark'] .appearance-option:not(.selected):hover {
+    background: #36442e;
+  }
+  :root[data-theme='dark'] :is(.character-avatar, .export-file-icon, .project-list-icon, .snapshot-icon) {
+    color: #bfd6a7;
+    background: #35452d;
+    border-color: #596c4b;
+  }
+  :root[data-theme='dark'] .avatar-1 {
+    color: #bbd8dc;
+    background: #354448;
+  }
+  :root[data-theme='dark'] .avatar-2 {
+    color: #e0cba9;
+    background: #4a4234;
+  }
+  :root[data-theme='dark'] .avatar-3 {
+    color: #d9c6d3;
+    background: #493c47;
+  }
+  :root[data-theme='dark'] :is(.status-unsaved, .status-saving) {
+    color: var(--warning);
+  }
+  :root[data-theme='dark'] .status-error {
+    color: var(--error);
+  }
+  :root[data-theme='dark'] .save-indicator svg {
+    color: var(--green);
+  }
+  :root[data-theme='dark'] .error-banner {
+    color: var(--warning);
+    background: #3a3020;
+  }
+  :root[data-theme='dark'] .form-error {
+    color: var(--error);
+    background: #442d26;
+  }
+  :root[data-theme='dark'] .boot-screen p {
+    color: var(--warning);
+  }
+  :root[data-theme='dark'] .toast {
+    color: #e0ebd2;
+    background: #35482f;
+    border: 1px solid #5d7650;
+    box-shadow: 0 6px 25px #050a0870;
+  }
+  :root[data-theme='dark'] .toast > svg {
+    color: #b4d49d;
+  }
+  :root[data-theme='dark'] .toggle > span {
+    background: #59604f;
+  }
+  :root[data-theme='dark'] .toggle > span::after {
+    background: #d9dfcf;
+  }
+  :root[data-theme='dark'] .toggle input:checked + span {
+    background: var(--green);
+  }
+  :root[data-theme='dark'] .toggle input:checked + span::after {
+    background: #1c2a1d;
+  }
+  :root[data-theme='dark'] .export-title-artwork img {
+    background: var(--paper);
+    border-color: var(--line);
+  }
+  :root[data-theme='dark'] .exit-focus {
+    color: var(--ink);
+    background: #273323f5;
+    border-color: #637354;
+  }
+  :root[data-theme='dark'] :is(button, a, input, select, textarea):focus-visible {
+    outline-color: var(--outline);
+  }
+  :root[data-theme='dark'] .appearance-option:focus-within {
+    outline-color: var(--outline);
+  }
+}
+
+@media print {
+  :root[data-theme] {
+    color-scheme: light !important;
+    background: #fff !important;
+  }
+  :root[data-theme] .paper-sheet {
+    background: #fff;
+  }
+  :root[data-theme] :is(.screenplay-editor, .printed-page-number, .continuation-marker) {
+    color: #252a25;
+  }
+}

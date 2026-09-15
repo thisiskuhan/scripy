@@ -46,6 +46,7 @@ More detail: [file format](docs/file-format.md), [roadmap](docs/professional-roa
 - Highlight effect inspired by [Aceternity Hero Highlight](https://ui.aceternity.com/components/hero-highlight).
 - Sample city photograph: [Unsplash](https://images.unsplash.com/photo-1449824913935-59a10b8d2000).
 - Scripy logo artwork: supplied with permission; Canva template assets retain their original terms.
-- The Quiet Hours is original demo screenplay content created for this project.
 
 Project code is [MIT licensed](LICENSE). Third-party components, fonts, images, logo assets, and movie quotations retain their own licenses and rights.
+
+Feel free to contribute, report bugs, or suggest improvements through an issue or pull request. Happy writing!

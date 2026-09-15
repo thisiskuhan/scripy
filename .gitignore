@@ -20,6 +20,21 @@ playwright-report
 .env.*
 !.env.example
 
+# Local deployment data, credentials, signing keys, and databases
+.vercel/
+.npmrc
+.netrc
+credentials.json
+service-account*.json
+client_secret*.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.db
+*.sqlite
+*.sqlite3
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -3,6 +3,11 @@
   "private": true,
   "version": "0.6.1",
   "description": "A local-first screenplay writing studio",
+  "license": "MIT",
+  "author": {
+    "name": "Kuhan S",
+    "url": "https://github.com/thisiskuhan"
+  },
   "main": "electron/main.cjs",
   "type": "module",
   "scripts": {

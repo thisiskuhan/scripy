@@ -14,7 +14,7 @@ if (metadata.format !== 'png' || metadata.width !== metadata.height)
   throw new Error('Provide the square PNG Scripy logo.')
 
 await fs.mkdir(path.dirname(sourcePath), { recursive: true })
-if (process.argv[2]) await fs.writeFile(sourcePath, source)
+await fs.writeFile(sourcePath, await image.clone().png().toBuffer())
 const icons = new Map()
 for (const size of [16, 32, 48, 180]) {
   const buffer = await image.clone().resize(size, size, { kernel: 'lanczos3' }).png().toBuffer()
